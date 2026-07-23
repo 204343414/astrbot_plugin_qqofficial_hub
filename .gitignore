@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.venv/
+.env
+*.key
+*.pem
+*.p12
+*.pfx
+data/

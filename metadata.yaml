@@ -1,0 +1,7 @@
+name: astrbot_plugin_qqofficial_hub
+display_name: QQ Official Hub
+desc: QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。
+version: 0.1.0
+author: 204343414
+astrbot_version: ">=4.26.7"
+repo: "https://github.com/204343414/astrbot_plugin_qqofficial_hub"
