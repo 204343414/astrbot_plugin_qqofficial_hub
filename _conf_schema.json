@@ -1,9 +1,14 @@
 {
-  "default": {
-    "metadata": {
-      "name": "QQ Official Hub",
-      "description": "QQ Official Keyboard 面板中枢。首版仅保留安全引导配置。"
-    },
-    "items": {}
+  "default_panel_name": {
+    "description": "默认卡片名称",
+    "hint": "首版默认命令 /头条卡片 对应的显示名称。实际按钮布局将在 Hub Web UI 中配置。",
+    "type": "string",
+    "default": "头条卡片"
+  },
+  "callback_ttl_hours": {
+    "description": "无害后台按钮有效期（小时）",
+    "hint": "配置修改后旧卡立即失效。当前仅预留设置，等待 QQ Official Interaction 适配器支持后启用。",
+    "type": "int",
+    "default": 24
   }
 }
