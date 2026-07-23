@@ -10,5 +10,11 @@
     "hint": "启用或关闭后必须完整重启 AstrBot。桥接 interaction intent、回调去重和 ACK；不修改磁盘中的 AstrBot 源码。若当前 AppID 无 Interaction Intent 权限，请关闭后重启。",
     "type": "bool",
     "default": false
+  },
+  "operator_openids": {
+    "description": "Hub 操作员 OpenID",
+    "hint": "用于 permission=operator 的按钮后端校验；多个用逗号、空格或换行分隔。",
+    "type": "text",
+    "default": ""
   }
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
@@ -22,6 +23,11 @@ class QQOfficialHubPlugin(Star):
         super().__init__(context)
         self.context = context
         self.config = config
+        raw_operators = config.get("operator_openids", "") or ""
+        self.operator_openids = {
+            item.strip() for item in re.split(r"[\s,，;；]+", str(raw_operators))
+            if item.strip()
+        }
         self.callback_ttl_seconds = max(int(config.get("callback_ttl_hours", 24)), 1) * 3600
         self.store = PanelStore(
             StarTools.get_data_dir(PLUGIN_NAME),
@@ -153,6 +159,15 @@ class QQOfficialHubPlugin(Star):
         await client.api.post_group_message(**payload)
         logger.info("[QQHub] Configured panel sent to %s revision=%s", origin, panel.get("revision"))
 
+    def _is_astrbot_admin_openid(self, member_openid: str, origin: str) -> bool:
+        try:
+            config = self.context.get_config(umo=origin)
+            admins = config.get("admins_id", []) or []
+            return member_openid in {str(item) for item in admins}
+        except Exception as exc:
+            logger.warning("[QQHub] Cannot read AstrBot admins_id: %s", exc)
+            return False
+
     async def _handle_interaction(self, client: Any, interaction: Any) -> int:
         resolved = getattr(getattr(interaction, "data", None), "resolved", None)
         data = str(getattr(resolved, "button_data", "") or "")
@@ -173,9 +188,11 @@ class QQOfficialHubPlugin(Star):
         policy = button["permission"]
         if policy == "specified_users" and member not in button["specified_users"]:
             return 4
-        # QQ manager permission is platform-enforced. AstrBot-admin/operator
-        # are deliberately denied until their authoritative ID source is wired.
-        if policy in {"astrbot_admin", "operator"}:
+        # group_manager is enforced by QQ before callback delivery. Policies
+        # without a QQ-native equivalent are verified here using OpenID.
+        if policy == "astrbot_admin" and not self._is_astrbot_admin_openid(member, origin):
+            return 4
+        if policy == "operator" and member not in self.operator_openids:
             return 4
         action = str(button["data"])
         logger.info("[QQHub] Callback action=%s group=%s member=%s", action, group_openid, member[-8:])
