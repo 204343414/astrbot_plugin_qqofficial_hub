@@ -125,6 +125,8 @@ function renderForm() {
   $("reply").checked = Boolean(button.reply); $("enter").checked = Boolean(button.enter); $("anchor").checked = button.anchor === 1;
   $("unsupport-tips").value = button.unsupport_tips || "当前 QQ 版本不支持该按钮";
   $("action-wrap").hidden = button.action_type !== 1;
+  $("action-params-wrap").hidden = button.action_type !== 1;
+  $("action-params").value = JSON.stringify(button.action_params || {}, null, 2);
   $("command-wrap").hidden = button.action_type !== 2;
   $("data-wrap").hidden = button.action_type === 1;
   $("data-label").textContent = button.action_type === 0 ? "HTTPS 跳转地址" : "写入聊天框的指令/文字";
@@ -236,7 +238,18 @@ window.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$
 ["label", "visited-label", "style", "action-type", "data", "permission", "users", "reply", "enter", "anchor", "unsupport-tips"].forEach((id) => $(id).addEventListener("input", editSelected));
 $("action-preset").addEventListener("change", () => {
   const button = selectedButton(); if (!button || !$("action-preset").value) return;
-  button.data = $("action-preset").value; render();
+  button.data = $("action-preset").value;
+  const spec = (state.action_catalog || []).find((item) => item.id === button.data);
+  if (spec?.default_permission && button.permission === "everyone") button.permission = spec.default_permission;
+  render();
+});
+$("action-params").addEventListener("change", () => {
+  const button = selectedButton(); if (!button) return;
+  try {
+    const value = JSON.parse($("action-params").value || "{}");
+    if (!value || Array.isArray(value) || typeof value !== "object") throw Error("必须是 JSON 对象");
+    button.action_params = value; setNotice("Action 参数已更新，保存面板后生效。");
+  } catch (error) { setNotice(`Action 参数格式错误：${error.message}`, true); }
 });
 $("command-preset").addEventListener("change", () => {
   const button = selectedButton(); if (!button || !$("command-preset").value) return;
@@ -247,7 +260,7 @@ $("command-preset").addEventListener("change", () => {
 });
 $("scope").onchange = () => { selected = null; $("group-wrap").hidden = $("scope").value !== "group"; render(); };
 $("group").onchange = () => { selected = null; render(); };
-$("add").onclick = () => { try { const panel = editablePanel(), row = ensureRow(panel); panel.rows[row].push({ id: `button-${Date.now()}`, label: "新按钮", visited_label: "新按钮", style: 0, action_type: 2, data: "/myrss list", permission: "everyone", specified_users: [], reply: false, enter: false, anchor: 0, unsupport_tips: "当前 QQ 版本不支持该按钮" }); selected = { row, col: panel.rows[row].length - 1 }; render(); } catch (error) { setNotice(error.message, true); } };
+$("add").onclick = () => { try { const panel = editablePanel(), row = ensureRow(panel); panel.rows[row].push({ id: `button-${Date.now()}`, label: "新按钮", visited_label: "新按钮", style: 0, action_type: 2, data: "/myrss list", permission: "everyone", specified_users: [], action_params: {}, reply: false, enter: false, anchor: 0, unsupport_tips: "当前 QQ 版本不支持该按钮" }); selected = { row, col: panel.rows[row].length - 1 }; render(); } catch (error) { setNotice(error.message, true); } };
 $("delete").onclick = () => { if (!selected) return; const panel = editablePanel(); panel.rows[selected.row].splice(selected.col, 1); compactRows(panel); selected = null; render(); };
 $("save").onclick = save; $("send-test").onclick = sendTest;
 load().catch((error) => setNotice(`加载失败：${error.message}`, true));

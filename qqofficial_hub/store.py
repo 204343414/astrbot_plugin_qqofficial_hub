@@ -240,6 +240,15 @@ def _validate_button(value: object) -> dict[str, Any]:
         raise ValueError("URL 按钮只允许 https:// 地址")
     if action_type == 1 and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", data):
         raise ValueError("后台动作必须是受控 action_id，不能填命令或脚本")
+    action_params = value.get("action_params", {}) if action_type == 1 else {}
+    if not isinstance(action_params, dict):
+        raise ValueError("后台 Action 参数必须是 JSON 对象")
+    try:
+        encoded_params = json.dumps(action_params, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("后台 Action 参数必须可序列化为 JSON") from exc
+    if len(encoded_params.encode("utf-8")) > 2048:
+        raise ValueError("后台 Action 参数不能超过 2048 字节")
     reply = bool(value.get("reply", False))
     enter = bool(value.get("enter", False))
     anchor = int(value.get("anchor", 0) or 0)
@@ -262,6 +271,7 @@ def _validate_button(value: object) -> dict[str, Any]:
         "data": data,
         "permission": permission,
         "specified_users": users,
+        "action_params": action_params,
         "reply": reply,
         "enter": enter,
         "anchor": anchor,

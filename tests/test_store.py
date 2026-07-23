@@ -122,3 +122,19 @@ def test_markdown_parameter_command_is_validated_and_limited():
     too_long = {**panel, "markdown": f'<qqbot-cmd-input text="{"x" * 101}" show="x" reference="false" />'}
     with pytest.raises(ValueError, match="1~100"):
         validate_panel(too_long)
+
+
+def test_callback_action_params_must_be_small_json_object():
+    panel = {
+        "name": "动作参数",
+        "markdown": "# 参数",
+        "rows": [[{
+            "id": "page-next", "label": "下一页", "visited_label": "下一页",
+            "style": 1, "action_type": 1, "data": "hub.test",
+            "permission": "everyone", "action_params": {"page": 2},
+        }]],
+    }
+    assert validate_panel(panel)["rows"][0][0]["action_params"] == {"page": 2}
+    invalid = {**panel, "rows": [[{**panel["rows"][0][0], "action_params": [1, 2]}]]}
+    with pytest.raises(ValueError, match="JSON 对象"):
+        validate_panel(invalid)

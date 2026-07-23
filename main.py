@@ -11,6 +11,11 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
 from .qqofficial_hub import interaction_bridge
+from .qqofficial_hub.action_registry import (
+    ActionContext,
+    ActionSpec,
+    get_action_registry,
+)
 from .qqofficial_hub.store import PanelStore
 from .web import HubWebController
 
@@ -33,6 +38,24 @@ class QQOfficialHubPlugin(Star):
             StarTools.get_data_dir(PLUGIN_NAME),
             callback_ttl_seconds=self.callback_ttl_seconds,
         )
+        self.actions = get_action_registry()
+        self.actions.unregister_owner(PLUGIN_NAME)
+        self.actions.register(ActionSpec(
+            action_id="hub.refresh",
+            title="刷新当前面板",
+            description="重新读取当前群配置并发送一张新面板",
+            owner=PLUGIN_NAME,
+            default_permission="everyone",
+            callback=self._action_refresh,
+        ))
+        self.actions.register(ActionSpec(
+            action_id="hub.test",
+            title="测试后台回调",
+            description="ACK 后发送一张新面板，用于验证 Interaction 和点击者 At",
+            owner=PLUGIN_NAME,
+            default_permission="group_manager",
+            callback=self._action_test,
+        ))
         self.web = HubWebController(context, self.store, self)
         self.web.register_routes()
         self.experimental_bridge = bool(config.get("experimental_interaction_bridge", False))
@@ -47,6 +70,7 @@ class QQOfficialHubPlugin(Star):
             logger.info("[QQHub] Editor loaded. Experimental callback bridge is disabled.")
 
     async def terminate(self) -> None:
+        self.actions.unregister_owner(PLUGIN_NAME)
         if self.experimental_bridge:
             interaction_bridge.detach(PLUGIN_NAME)
 
@@ -82,21 +106,9 @@ class QQOfficialHubPlugin(Star):
             logger.exception("[QQHub] Failed to send whiteboard")
             yield event.plain_result(f"测试卡发送失败：{type(exc).__name__}: {exc}")
 
-    @staticmethod
-    def get_action_catalog() -> list[dict[str, str]]:
+    def get_action_catalog(self) -> list[dict[str, str]]:
         """Only registered, implemented callbacks may be selected by the UI."""
-        return [
-            {
-                "id": "hub.refresh",
-                "title": "刷新当前面板",
-                "description": "重新读取当前群配置并发送一张新面板",
-            },
-            {
-                "id": "hub.test",
-                "title": "测试后台回调",
-                "description": "ACK 后发送一张新面板，用于验证 Interaction 和点击者 At",
-            },
-        ]
+        return self.actions.catalog()
 
     def validate_registered_actions(self, panel: object) -> None:
         if not isinstance(panel, dict):
@@ -202,6 +214,26 @@ class QQOfficialHubPlugin(Star):
         await client.api.post_group_message(**payload)
         logger.info("[QQHub] Configured panel sent to %s revision=%s", origin, panel.get("revision"))
 
+    async def _action_refresh(
+        self, context: ActionContext, params: dict[str, Any]
+    ) -> int:
+        task = asyncio.create_task(
+            self._send_configured_panel(
+                context.origin,
+                client=context.client,
+                mention_openid=context.member_openid,
+            )
+        )
+        task.add_done_callback(self._log_refresh_failure)
+        return 0
+
+    async def _action_test(
+        self, context: ActionContext, params: dict[str, Any]
+    ) -> int:
+        # The harmless test currently behaves like refresh; params are accepted
+        # to prove structured Action plumbing without executing arbitrary code.
+        return await self._action_refresh(context, params)
+
     def _is_astrbot_admin_openid(self, member_openid: str, origin: str) -> bool:
         try:
             config = self.context.get_config(umo=origin)
@@ -237,27 +269,22 @@ class QQOfficialHubPlugin(Star):
             return 4
         if policy == "operator" and member not in self.operator_openids:
             return 4
-        action = str(button["data"])
-        logger.info("[QQHub] Callback action=%s group=%s member=%s", action, group_openid, member[-8:])
-        if action == "hub.refresh":
-            # Callback ACK is separate from chat output. Send a fresh active panel;
-            # reusing the original msg_id would expire after QQ's passive window.
-            task = asyncio.create_task(
-                self._send_configured_panel(
-                    origin, client=client, mention_openid=member
-                )
-            )
-            task.add_done_callback(self._log_refresh_failure)
-        elif action == "hub.test":
-            task = asyncio.create_task(
-                self._send_configured_panel(
-                    origin, client=client, mention_openid=member
-                )
-            )
-            task.add_done_callback(self._log_refresh_failure)
-        else:
+        action_id = str(button["data"])
+        params = button.get("action_params", {})
+        if not isinstance(params, dict):
             return 1
-        return 0
+        logger.info(
+            "[QQHub] Callback action=%s group=%s member=%s",
+            action_id, group_openid, member[-8:],
+        )
+        context = ActionContext(
+            client=client,
+            interaction=interaction,
+            origin=origin,
+            group_openid=group_openid,
+            member_openid=member,
+        )
+        return await self.actions.execute(action_id, context, params)
 
     @staticmethod
     def _log_refresh_failure(task: asyncio.Task) -> None:
