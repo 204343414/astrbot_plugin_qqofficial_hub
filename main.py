@@ -152,7 +152,9 @@ class QQOfficialHubPlugin(Star):
         rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
         markdown_content = str(panel["markdown"])
         if mention_openid and panel.get("mention_clicker"):
-            markdown_content = f"<@{mention_openid}>\n{markdown_content}"
+            markdown_content = (
+                f'<qqbot-at-user id="{mention_openid}" />\n{markdown_content}'
+            )
         payload = {
             "group_openid": origin.split(":", 2)[-1],
             "msg_type": 2,

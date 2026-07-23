@@ -9,6 +9,7 @@ import re
 import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 PANEL_ID = "default_panel"
 MAX_ROWS = 5
@@ -269,7 +270,25 @@ def _validate_button(value: object) -> dict[str, Any]:
 
 
 def _validate_markdown(markdown: str) -> None:
-    """Validate the documented QQ custom-Markdown link and image forms."""
+    """Validate documented QQ Markdown images, links and input-command tags."""
+    command_pattern = re.compile(
+        r'<qqbot-cmd-input\s+text="([^"]+)"'
+        r'(?:\s+show="([^"]*)")?'
+        r'(?:\s+reference="(true|false)")?\s*/>'
+    )
+    for encoded_text, encoded_show, _reference in command_pattern.findall(markdown):
+        if re.search(r"\s", encoded_text) or re.search(r"\s", encoded_show or ""):
+            raise ValueError("参数指令格式错误：text/show 必须先 URL encode")
+        text = unquote(encoded_text)
+        show = unquote(encoded_show) if encoded_show else text
+        if not text or len(text) > 100 or len(show) > 100:
+            raise ValueError("Markdown 参数指令的 text/show 解码后必须为 1~100 字符")
+    remaining_commands = command_pattern.sub("", markdown)
+    if "<qqbot-cmd-input" in remaining_commands:
+        raise ValueError("参数指令格式错误，必须使用 text/show/reference 属性和双引号")
+    if "<qqbot-cmd-enter" in markdown:
+        raise ValueError("群控制面板不支持回车指令；请使用 qqbot-cmd-input 参数指令")
+
     image_pattern = re.compile(
         r"!\[[^\]]+\s+#(\d+)px\s+#(\d+)px\]\((https://[^\s)]+)\)"
     )

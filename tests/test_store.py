@@ -107,3 +107,18 @@ def test_panel_can_enable_clicker_mention():
         "rows": [],
     }
     assert validate_panel(panel)["mention_clicker"] is True
+
+
+def test_markdown_parameter_command_is_validated_and_limited():
+    panel = {
+        "name": "文本按钮",
+        "markdown": '<qqbot-cmd-input text="%2Fmyrss%20%2B%20" show="%F0%9F%93%A1%20%E6%B7%BB%E5%8A%A0%E8%AE%A2%E9%98%85" reference="true" />',
+        "rows": [],
+    }
+    validate_panel(panel)
+    malformed = {**panel, "markdown": '<qqbot-cmd-input text="/myrss + " />'}
+    with pytest.raises(ValueError, match="格式错误"):
+        validate_panel(malformed)
+    too_long = {**panel, "markdown": f'<qqbot-cmd-input text="{"x" * 101}" show="x" reference="false" />'}
+    with pytest.raises(ValueError, match="1~100"):
+        validate_panel(too_long)

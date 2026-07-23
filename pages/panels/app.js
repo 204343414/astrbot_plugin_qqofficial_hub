@@ -21,25 +21,33 @@ function setNotice(text, error = false) { const el = $("notice"); el.textContent
 function selectedButton() { return selected ? editablePanel().rows[selected.row]?.[selected.col] : null; }
 function safeUrl(value) { try { const url = new URL(value); return url.protocol === "https:" ? url.href : ""; } catch { return ""; } }
 
+function decodeValue(value) { try { return decodeURIComponent(value || ""); } catch { return value || ""; } }
 function renderInline(target, text) {
-  const pattern = /!\[([^\]]+?)\s+#(\d+)px\s+#(\d+)px\]\((https:\/\/[^\s)]+)\)|\[([^\]]+)\]\((https:\/\/[^\s)]+)\)|<(https:\/\/[^>]+)>|\*\*([^*]+)\*\*|~~([^~]+)~~/g;
+  const pattern = /<qqbot-cmd-input\s+text="([^"]+)"(?:\s+show="([^"]*)")?(?:\s+reference="(true|false)")?\s*\/>|!\[([^\]]+?)\s+#(\d+)px\s+#(\d+)px\]\((https:\/\/[^\s)]+)\)|\[([^\]]+)\]\((https:\/\/[^\s)]+)\)|<(https:\/\/[^>]+)>|\*\*([^*]+)\*\*|~~([^~]+)~~/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     target.append(document.createTextNode(text.slice(cursor, match.index)));
     if (match[1]) {
+      const command = document.createElement("button");
+      command.className = "text-command-preview";
+      command.textContent = decodeValue(match[2] || match[1]);
+      command.title = `点击后写入输入框：${decodeValue(match[1])}${match[3] === "true" ? "（引用本卡）" : ""}`;
+      command.onclick = () => setNotice(command.title);
+      target.append(command);
+    } else if (match[4]) {
       const image = document.createElement("img");
-      image.alt = match[1]; image.src = safeUrl(match[4]);
-      image.style.width = `${Math.min(Number(match[2]), 720)}px`;
-      image.style.maxHeight = `${Math.min(Number(match[3]), 1080)}px`;
+      image.alt = match[4]; image.src = safeUrl(match[7]);
+      image.style.width = `${Math.min(Number(match[5]), 720)}px`;
+      image.style.maxHeight = `${Math.min(Number(match[6]), 1080)}px`;
       image.referrerPolicy = "no-referrer"; target.append(image);
-    } else if (match[5]) {
-      const link = document.createElement("a"); link.textContent = match[5]; link.href = safeUrl(match[6]); link.target = "_blank"; link.rel = "noopener noreferrer"; target.append(link);
-    } else if (match[7]) {
-      const link = document.createElement("a"); link.textContent = match[7]; link.href = safeUrl(match[7]); link.target = "_blank"; link.rel = "noopener noreferrer"; target.append(link);
     } else if (match[8]) {
-      const strong = document.createElement("strong"); strong.textContent = match[8]; target.append(strong);
-    } else if (match[9]) {
-      const del = document.createElement("del"); del.textContent = match[9]; target.append(del);
+      const link = document.createElement("a"); link.textContent = match[8]; link.href = safeUrl(match[9]); link.target = "_blank"; link.rel = "noopener noreferrer"; target.append(link);
+    } else if (match[10]) {
+      const link = document.createElement("a"); link.textContent = match[10]; link.href = safeUrl(match[10]); link.target = "_blank"; link.rel = "noopener noreferrer"; target.append(link);
+    } else if (match[11]) {
+      const strong = document.createElement("strong"); strong.textContent = match[11]; target.append(strong);
+    } else if (match[12]) {
+      const del = document.createElement("del"); del.textContent = match[12]; target.append(del);
     }
     cursor = match.index + match[0].length;
   }
@@ -150,6 +158,12 @@ function insertMarkdownSnippet(snippet) {
 $("mention-clicker").addEventListener("input", () => { editablePanel().mention_clicker = $("mention-clicker").checked; render(); });
 $("insert-link").onclick = () => insertMarkdownSnippet("[🔗链接文字](https://example.com)");
 $("insert-image").onclick = () => insertMarkdownSnippet("![图片说明 #618px #249px](https://example.com/image.png)");
+$("insert-cmd-input").onclick = () => {
+  const text = $("cmd-text").value.trim(), show = $("cmd-show").value.trim() || text;
+  if (!text) { setNotice("写入输入框的内容不能为空", true); return; }
+  const reference = $("cmd-reference").checked ? "true" : "false";
+  insertMarkdownSnippet(`<qqbot-cmd-input text="${encodeURIComponent(text)}" show="${encodeURIComponent(show)}" reference="${reference}" />`);
+};
 ["label", "visited-label", "style", "action-type", "data", "permission", "users", "reply", "enter", "anchor", "unsupport-tips"].forEach((id) => $(id).addEventListener("input", editSelected));
 $("scope").onchange = () => { selected = null; $("group-wrap").hidden = $("scope").value !== "group"; render(); };
 $("group").onchange = () => { selected = null; render(); };
