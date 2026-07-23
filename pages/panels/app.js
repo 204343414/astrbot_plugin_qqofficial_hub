@@ -114,6 +114,9 @@ function drop(event) {
   const position = Math.min(targetColumn, panel.rows[targetRow].length); panel.rows[targetRow].splice(position, 0, item);
   compactRows(panel); selected = { row: targetRow, col: position }; dragging = null; render();
 }
+function matchingCatalogCommand(data) {
+  return (state.command_catalog || []).find((item) => data === item.command || data.startsWith(`${item.command} `));
+}
 function renderForm() {
   const button = selectedButton(), form = $("form"); form.hidden = !button; if (!button) return;
   $("label").value = button.label; $("visited-label").value = button.visited_label; $("style").value = button.style;
@@ -121,6 +124,11 @@ function renderForm() {
   $("users").value = (button.specified_users || []).join("\n"); $("users-wrap").hidden = button.permission !== "specified_users";
   $("reply").checked = Boolean(button.reply); $("enter").checked = Boolean(button.enter); $("anchor").checked = button.anchor === 1;
   $("unsupport-tips").value = button.unsupport_tips || "当前 QQ 版本不支持该按钮";
+  $("command-wrap").hidden = button.action_type !== 2;
+  $("data-label").textContent = button.action_type === 0 ? "HTTPS 跳转地址" : button.action_type === 1 ? "Hub 后台 action_id" : "写入聊天框的指令/文字";
+  const catalog = matchingCatalogCommand(button.data || "");
+  $("command-preset").value = catalog?.command || "";
+  $("command-meta").textContent = catalog ? `${catalog.permission === "admin" ? "仅管理员 · " : ""}${catalog.parameters || "无参数"}${catalog.description ? ` · ${catalog.description}` : ""}` : "";
 }
 function editSelected() {
   const button = selectedButton(); if (!button) return;
@@ -134,6 +142,12 @@ function ensureRow(panel) { if (!panel.rows.length || panel.rows.at(-1).length >
 async function load() {
   await bridge.ready(); state = await bridge.apiGet("bootstrap"); const groups = $("group"); groups.innerHTML = "";
   for (const item of Object.values(state.observed_groups)) { const option = document.createElement("option"); option.value = item.origin; option.textContent = item.origin; groups.append(option); }
+  const preset = $("command-preset");
+  for (const item of state.command_catalog || []) {
+    const option = document.createElement("option"); option.value = item.command;
+    option.textContent = `${item.command}${item.parameters ? `  (${item.parameters})` : ""}${item.permission === "admin" ? "  🔒" : ""}`;
+    preset.append(option);
+  }
   $("group-wrap").hidden = !groups.options.length; if (!groups.options.length) $("scope").value = "global"; render();
 }
 async function save() {
@@ -203,6 +217,13 @@ $("markdown-apply").onclick = () => {
 $("markdown-modal").addEventListener("click", (event) => { if (event.target === $("markdown-modal")) closeMarkdownEditor(); });
 window.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("markdown-modal").hidden) closeMarkdownEditor(); });
 ["label", "visited-label", "style", "action-type", "data", "permission", "users", "reply", "enter", "anchor", "unsupport-tips"].forEach((id) => $(id).addEventListener("input", editSelected));
+$("command-preset").addEventListener("change", () => {
+  const button = selectedButton(); if (!button || !$("command-preset").value) return;
+  button.data = $("command-preset").value;
+  const command = matchingCatalogCommand(button.data);
+  if (command?.permission === "admin" && button.permission === "everyone") button.permission = "astrbot_admin";
+  render();
+});
 $("scope").onchange = () => { selected = null; $("group-wrap").hidden = $("scope").value !== "group"; render(); };
 $("group").onchange = () => { selected = null; render(); };
 $("add").onclick = () => { try { const panel = editablePanel(), row = ensureRow(panel); panel.rows[row].push({ id: `button-${Date.now()}`, label: "新按钮", visited_label: "新按钮", style: 0, action_type: 2, data: "/myrss list", permission: "everyone", specified_users: [], reply: false, enter: false, anchor: 0, unsupport_tips: "当前 QQ 版本不支持该按钮" }); selected = { row, col: panel.rows[row].length - 1 }; render(); } catch (error) { setNotice(error.message, true); } };

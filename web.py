@@ -5,6 +5,7 @@ from typing import Any
 from astrbot.api.web import error_response, json_response, request
 from astrbot.api.star import Context
 
+from .qqofficial_hub.command_catalog import build_command_catalog
 from .qqofficial_hub.store import PanelStore
 
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
@@ -22,7 +23,9 @@ class HubWebController:
         self.context.register_web_api(f"/{PLUGIN_NAME}/send-test", self.send_test, ["POST"], "Send panel to an observed QQ group")
 
     async def bootstrap(self):
-        return json_response(await self.store.bootstrap())
+        payload = await self.store.bootstrap()
+        payload["command_catalog"] = build_command_catalog(self.context)
+        return json_response(payload)
 
     async def save_panel(self):
         payload: dict[str, Any] = await request.json(default={})
