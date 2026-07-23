@@ -97,3 +97,13 @@ def test_saved_revision_invalidates_previously_issued_callback_card():
             await store.save_panel("global", "", changed)
             assert await store.get_issued_button(origin, nonce, "refresh") is None
     asyncio.run(scenario())
+
+
+def test_panel_can_enable_clicker_mention():
+    panel = {
+        "name": "At点击者",
+        "markdown": "# 操作结果",
+        "mention_clicker": True,
+        "rows": [],
+    }
+    assert validate_panel(panel)["mention_clicker"] is True

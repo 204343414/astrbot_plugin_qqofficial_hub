@@ -138,17 +138,25 @@ class QQOfficialHubPlugin(Star):
         }
 
     async def _send_configured_panel(
-        self, origin: str, client=None, msg_id: str | None = None, event_id: str | None = None
+        self,
+        origin: str,
+        client=None,
+        msg_id: str | None = None,
+        event_id: str | None = None,
+        mention_openid: str = "",
     ) -> None:
         client = client or self._get_qq_client(origin)
         snapshot = await self.store.bootstrap()
         panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
         nonce = await self.store.issue_panel_card(origin, panel, reply_msg_id=msg_id)
         rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
+        markdown_content = str(panel["markdown"])
+        if mention_openid and panel.get("mention_clicker"):
+            markdown_content = f"<@{mention_openid}>\n{markdown_content}"
         payload = {
             "group_openid": origin.split(":", 2)[-1],
             "msg_type": 2,
-            "markdown": {"content": panel["markdown"]},
+            "markdown": {"content": markdown_content},
             "keyboard": {"content": {"rows": rows}},
             "msg_seq": random.randint(1, 10000),
         }
@@ -200,10 +208,19 @@ class QQOfficialHubPlugin(Star):
             # Callback ACK is separate from chat output. Send a fresh active panel;
             # reusing the original msg_id would expire after QQ's passive window.
             task = asyncio.create_task(
-                self._send_configured_panel(origin, client=client)
+                self._send_configured_panel(
+                    origin, client=client, mention_openid=member
+                )
             )
             task.add_done_callback(self._log_refresh_failure)
-        elif action != "hub.test":
+        elif action == "hub.test":
+            task = asyncio.create_task(
+                self._send_configured_panel(
+                    origin, client=client, mention_openid=member
+                )
+            )
+            task.add_done_callback(self._log_refresh_failure)
+        else:
             return 1
         return 0
 

@@ -63,7 +63,14 @@ function renderMarkdown(text) {
 function render() {
   const panel = editablePanel();
   $("name").value = panel.name; $("markdown").value = panel.markdown;
+  $("mention-clicker").checked = Boolean(panel.mention_clicker);
   $("preview-title").textContent = panel.name; renderMarkdown(panel.markdown);
+  if (panel.mention_clicker) {
+    const mention = document.createElement("div");
+    mention.className = "mention-preview";
+    mention.textContent = "@点击者（仅 type=1 回调后生成的新卡）";
+    $("preview-markdown").prepend(mention);
+  }
   const canvas = $("canvas"); canvas.innerHTML = "";
   for (let rowIndex = 0; rowIndex < 5; rowIndex += 1) {
     const row = document.createElement("div"); row.className = "row";
@@ -133,7 +140,16 @@ async function sendTest() {
   catch (error) { setNotice(error.message || "测试发送失败", true); }
   finally { button.disabled = false; button.textContent = "发送到群测试"; }
 }
+function insertMarkdownSnippet(snippet) {
+  const textarea = $("markdown"), start = textarea.selectionStart, end = textarea.selectionEnd;
+  textarea.value = textarea.value.slice(0, start) + snippet + textarea.value.slice(end);
+  const panel = editablePanel(); panel.markdown = textarea.value; render();
+  textarea.focus(); textarea.selectionStart = textarea.selectionEnd = start + snippet.length;
+}
 ["name", "markdown"].forEach((id) => $(id).addEventListener("input", () => { const panel = editablePanel(); panel[id] = $(id).value; render(); }));
+$("mention-clicker").addEventListener("input", () => { editablePanel().mention_clicker = $("mention-clicker").checked; render(); });
+$("insert-link").onclick = () => insertMarkdownSnippet("[🔗链接文字](https://example.com)");
+$("insert-image").onclick = () => insertMarkdownSnippet("![图片说明 #618px #249px](https://example.com/image.png)");
 ["label", "visited-label", "style", "action-type", "data", "permission", "users", "reply", "enter", "anchor", "unsupport-tips"].forEach((id) => $(id).addEventListener("input", editSelected));
 $("scope").onchange = () => { selected = null; $("group-wrap").hidden = $("scope").value !== "group"; render(); };
 $("group").onchange = () => { selected = null; render(); };

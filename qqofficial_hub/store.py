@@ -23,6 +23,7 @@ def empty_panel() -> dict[str, Any]:
         "id": PANEL_ID,
         "name": "QQ Official Hub 能力测试卡",
         "markdown": "# QQ Official Hub 能力测试卡\n**Markdown 正文**、[🔗蓝色链接](https://bot.q.qq.com/) 与最多 5×5 个按钮。",
+        "mention_clicker": True,
         "rows": [
             [
                 {"id": "blue_everyone", "label": "蓝色：所有人可点", "visited_label": "蓝色：所有人可点", "style": 1, "action_type": 1, "data": "hub.test", "permission": "everyone", "specified_users": []},
@@ -202,7 +203,13 @@ def validate_panel(value: object) -> dict[str, Any]:
     button_ids = [button["id"] for row in normalized_rows for button in row]
     if len(button_ids) != len(set(button_ids)):
         raise ValueError("同一张卡片内的按钮 ID 必须唯一")
-    return {"id": PANEL_ID, "name": name, "markdown": markdown, "rows": normalized_rows}
+    return {
+        "id": PANEL_ID,
+        "name": name,
+        "markdown": markdown,
+        "mention_clicker": bool(value.get("mention_clicker", False)),
+        "rows": normalized_rows,
+    }
 
 
 def _validate_button(value: object) -> dict[str, Any]:
