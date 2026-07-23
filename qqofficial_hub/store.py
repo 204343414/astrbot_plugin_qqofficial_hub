@@ -41,6 +41,54 @@ def empty_panel() -> dict[str, Any]:
     }
 
 
+NODE_TYPES = {"panel", "command", "url", "action", "confirm"}
+
+
+def default_blueprint() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "viewport": {"x": 80, "y": 80, "scale": 1},
+        "nodes": [
+            {"id": "root", "type": "panel", "title": "头条主菜单", "x": 0, "y": 0, "panel_id": PANEL_ID}
+        ],
+        "edges": [],
+    }
+
+
+def validate_blueprint(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("蓝图必须是对象")
+    raw_nodes = value.get("nodes", [])
+    raw_edges = value.get("edges", [])
+    viewport = value.get("viewport", {})
+    if not isinstance(raw_nodes, list) or len(raw_nodes) > 200:
+        raise ValueError("蓝图节点数量必须在 0 到 200 之间")
+    if not isinstance(raw_edges, list) or len(raw_edges) > 400:
+        raise ValueError("蓝图连线数量必须在 0 到 400 之间")
+    nodes, node_ids = [], set()
+    for item in raw_nodes:
+        if not isinstance(item, dict):
+            raise ValueError("蓝图节点格式错误")
+        node_id = _text(item.get("id"), "节点 ID", 80)
+        if node_id in node_ids:
+            raise ValueError("蓝图节点 ID 必须唯一")
+        node_ids.add(node_id)
+        node_type = item.get("type")
+        if node_type not in NODE_TYPES:
+            raise ValueError("未知蓝图节点类型")
+        nodes.append({"id": node_id, "type": node_type, "title": _text(item.get("title"), "节点名称", 80), "x": float(item.get("x", 0)), "y": float(item.get("y", 0)), "panel_id": str(item.get("panel_id") or "")})
+    edges = []
+    for edge in raw_edges:
+        if not isinstance(edge, dict) or edge.get("from") not in node_ids or edge.get("to") not in node_ids:
+            raise ValueError("蓝图连线必须连接已有节点")
+        if edge["from"] != edge["to"]:
+            edges.append({"from": edge["from"], "to": edge["to"]})
+    if not isinstance(viewport, dict):
+        viewport = {}
+    scale = float(viewport.get("scale", 1))
+    return {"version": 1, "viewport": {"x": float(viewport.get("x", 80)), "y": float(viewport.get("y", 80)), "scale": max(0.25, min(scale, 2.5))}, "nodes": nodes, "edges": edges}
+
+
 class PanelStore:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
@@ -55,6 +103,7 @@ class PanelStore:
             "group_overrides": {},
             "observed_groups": {},
             "issued_test_cards": {},
+            "blueprint": default_blueprint(),
         }
 
     def _load(self) -> dict[str, Any]:
@@ -73,6 +122,7 @@ class PanelStore:
         value.setdefault("group_overrides", {})
         value.setdefault("observed_groups", {})
         value.setdefault("issued_test_cards", {})
+        value.setdefault("blueprint", default_blueprint())
         default = value["templates"].get(PANEL_ID)
         if isinstance(default, dict) and default.get("name") == "头条卡片" and not default.get("rows"):
             value["templates"][PANEL_ID] = empty_panel()
@@ -98,6 +148,14 @@ class PanelStore:
     async def bootstrap(self) -> dict[str, Any]:
         async with self._lock:
             return copy.deepcopy(self._data)
+
+
+    async def save_blueprint(self, blueprint: object) -> dict[str, Any]:
+        normalized = validate_blueprint(blueprint)
+        async with self._lock:
+            self._data["blueprint"] = normalized
+            self._write_atomic(self._data)
+            return copy.deepcopy(normalized)
 
     async def observe_group(self, origin: str, platform_id: str) -> None:
         if not self._valid_group_origin(origin):

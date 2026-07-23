@@ -42,3 +42,23 @@ def test_issued_panel_button_is_scoped_to_its_group():
             assert await store.get_issued_button(origin, nonce, "refresh") is not None
             assert await store.get_issued_button("头条flag:GroupMessage:group-b", nonce, "refresh") is None
     asyncio.run(scenario())
+
+
+def test_blueprint_rejects_edges_to_missing_nodes_and_persists_valid_graph():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as temp:
+            store = PanelStore(Path(temp))
+            graph = {
+                "viewport": {"x": 0, "y": 0, "scale": 1},
+                "nodes": [
+                    {"id": "root", "type": "panel", "title": "主菜单", "x": 0, "y": 0},
+                    {"id": "rss", "type": "panel", "title": "RSS", "x": 100, "y": 0},
+                ],
+                "edges": [{"from": "root", "to": "rss"}],
+            }
+            saved = await store.save_blueprint(graph)
+            assert saved["edges"] == [{"from": "root", "to": "rss"}]
+            graph["edges"] = [{"from": "root", "to": "missing"}]
+            with pytest.raises(ValueError, match="已有节点"):
+                await store.save_blueprint(graph)
+    asyncio.run(scenario())
