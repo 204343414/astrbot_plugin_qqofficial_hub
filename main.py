@@ -110,6 +110,58 @@ class QQOfficialHubPlugin(Star):
             logger.exception("[QQHub] Failed to send whiteboard")
             yield event.plain_result(f"测试卡发送失败：{type(exc).__name__}: {exc}")
 
+    @qqhub.command("艾特回复测试")
+    async def mention_reply_probe(self, event: AstrMessageEvent):
+        """Type 2/typed-command probe: one native text reply that At's sender."""
+        event.stop_event()
+        try:
+            await self._send_native_mention_probe(event, reply=True)
+        except Exception as exc:
+            logger.exception("[QQHub] Native mention reply probe failed")
+            yield event.plain_result(f"艾特回复测试失败：{type(exc).__name__}: {exc}")
+
+    @qqhub.command("艾特主动测试")
+    async def mention_proactive_probe(self, event: AstrMessageEvent):
+        """Type 2/typed-command probe: one proactive native text At."""
+        event.stop_event()
+        try:
+            await self._send_native_mention_probe(event, reply=False)
+        except Exception as exc:
+            logger.exception("[QQHub] Native mention proactive probe failed")
+            yield event.plain_result(f"艾特主动测试失败：{type(exc).__name__}: {exc}")
+
+    async def _send_native_mention_probe(
+        self, event: AstrMessageEvent, *, reply: bool
+    ) -> None:
+        origin = str(event.unified_msg_origin or "")
+        if "GroupMessage" not in origin:
+            raise ValueError("该测试仅支持 QQ Official 群聊")
+        client = self._get_qq_client(origin)
+        member_openid = str(event.get_sender_id() or "").strip()
+        if not member_openid:
+            raise ValueError("当前消息没有 group_member_openid")
+        payload: dict[str, Any] = {
+            "group_openid": origin.split(":", 2)[-1],
+            "msg_type": 0,
+            "content": (
+                f'<qqbot-at-user id="{member_openid}" /> '
+                f'{"被动回复" if reply else "主动消息"}艾特测试成功'
+            ),
+            "msg_seq": random.randint(1, 10000),
+        }
+        if reply:
+            msg_id = str(event.message_obj.message_id or "").strip()
+            if not msg_id:
+                raise ValueError("当前消息没有可用于回复的 msg_id")
+            payload["msg_id"] = msg_id
+        await client.api.post_group_message(**payload)
+        logger.info(
+            "[QQHub] Native mention probe sent mode=%s group=%s member=%s",
+            "reply" if reply else "proactive",
+            payload["group_openid"],
+            member_openid[-8:],
+        )
+
     @staticmethod
     def _command_action_id(command: str) -> str:
         digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
