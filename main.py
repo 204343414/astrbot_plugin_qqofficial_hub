@@ -52,6 +52,9 @@ class QQOfficialHubPlugin(Star):
 
     @filter.command("头条卡片", desc="发送 QQ Official Hub 白板测试卡")
     async def send_default_panel(self, event: AstrMessageEvent):
+        # This is a control command, never an LLM prompt. AstrBot continues the
+        # pipeline unless a command handler explicitly stops the event.
+        event.stop_event()
         origin = str(event.unified_msg_origin or "")
         if "GroupMessage" not in origin:
             yield event.plain_result("头条卡片目前仅支持 QQ Official 群聊。")
