@@ -40,6 +40,7 @@ class PanelStore:
             "templates": {PANEL_ID: empty_panel()},
             "group_overrides": {},
             "observed_groups": {},
+            "issued_test_cards": {},
         }
 
     def _load(self) -> dict[str, Any]:
@@ -57,6 +58,7 @@ class PanelStore:
         value.setdefault("templates", {PANEL_ID: empty_panel()})
         value.setdefault("group_overrides", {})
         value.setdefault("observed_groups", {})
+        value.setdefault("issued_test_cards", {})
         return value
 
     def _write_atomic(self, value: dict[str, Any]) -> None:
@@ -105,6 +107,34 @@ class PanelStore:
                 raise ValueError("scope 只能是 global 或 group")
             self._write_atomic(self._data)
             return copy.deepcopy(normalized)
+
+
+    async def issue_test_card(self, origin: str) -> str:
+        """Persist a short-lived opaque callback capability before sending."""
+        import secrets
+        import time
+        if not self._valid_group_origin(origin):
+            raise ValueError("测试卡只能发送到 QQ Official 群")
+        async with self._lock:
+            nonce = secrets.token_urlsafe(18)
+            now = int(time.time())
+            cards = self._data["issued_test_cards"]
+            for key, item in list(cards.items()):
+                if not isinstance(item, dict) or int(item.get("expires_at", 0)) <= now:
+                    cards.pop(key, None)
+            cards[nonce] = {"origin": origin, "expires_at": now + 900}
+            self._write_atomic(self._data)
+            return nonce
+
+    async def claim_test_action(self, origin: str, nonce: str) -> bool:
+        import time
+        async with self._lock:
+            item = self._data["issued_test_cards"].get(nonce)
+            if not isinstance(item, dict):
+                return False
+            if item.get("origin") != origin or int(item.get("expires_at", 0)) <= int(time.time()):
+                return False
+            return True
 
     def _valid_group_origin(self, origin: str) -> bool:
         parts = origin.split(":", 2)

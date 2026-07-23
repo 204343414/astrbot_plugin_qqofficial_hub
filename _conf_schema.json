@@ -10,5 +10,11 @@
     "hint": "配置修改后旧卡立即失效。当前仅预留设置，等待 QQ Official Interaction 适配器支持后启用。",
     "type": "int",
     "default": 24
+  },
+  "experimental_interaction_bridge": {
+    "description": "启用实验性 QQ Interaction 测试桥",
+    "hint": "仅用于 /头条卡片 白板验收。开启或关闭后都必须完整重启 AstrBot；它会运行时接入 QQ Official Adapter，但不会修改磁盘源码。未完成真实验证前，不会连接 MyRSS、退订或其他业务动作。",
+    "type": "bool",
+    "default": false
   }
 }
