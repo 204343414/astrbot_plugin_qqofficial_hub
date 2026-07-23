@@ -62,3 +62,21 @@ def test_blueprint_rejects_edges_to_missing_nodes_and_persists_valid_graph():
             with pytest.raises(ValueError, match="已有节点"):
                 await store.save_blueprint(graph)
     asyncio.run(scenario())
+
+from qqofficial_hub.blueprint import parse_blueprint
+
+
+def test_blueprint_runtime_requires_one_root_panel_and_one_edge_per_button():
+    valid = {
+        "root_node_id": "root",
+        "nodes": [
+            {"id": "root", "type": "panel", "title": "主菜单"},
+            {"id": "rss", "type": "panel", "title": "RSS"},
+        ],
+        "edges": [{"from": "root", "button_id": "rss-button", "to": "rss"}],
+    }
+    graph = parse_blueprint(valid)
+    assert graph.target_for("root", "rss-button") == "rss"
+    valid["edges"].append({"from": "root", "button_id": "rss-button", "to": "root"})
+    with pytest.raises(ValueError, match="只能连接一个"):
+        parse_blueprint(valid)
