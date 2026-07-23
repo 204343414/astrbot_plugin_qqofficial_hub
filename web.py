@@ -25,11 +25,13 @@ class HubWebController:
     async def bootstrap(self):
         payload = await self.store.bootstrap()
         payload["command_catalog"] = build_command_catalog(self.context)
+        payload["action_catalog"] = self.plugin.get_action_catalog()
         return json_response(payload)
 
     async def save_panel(self):
         payload: dict[str, Any] = await request.json(default={})
         try:
+            self.plugin.validate_registered_actions(payload.get("panel"))
             panel = await self.store.save_panel(
                 str(payload.get("scope", "")), str(payload.get("origin", "")), payload.get("panel")
             )

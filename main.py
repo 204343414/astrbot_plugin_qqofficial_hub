@@ -82,6 +82,39 @@ class QQOfficialHubPlugin(Star):
             logger.exception("[QQHub] Failed to send whiteboard")
             yield event.plain_result(f"测试卡发送失败：{type(exc).__name__}: {exc}")
 
+    @staticmethod
+    def get_action_catalog() -> list[dict[str, str]]:
+        """Only registered, implemented callbacks may be selected by the UI."""
+        return [
+            {
+                "id": "hub.refresh",
+                "title": "刷新当前面板",
+                "description": "重新读取当前群配置并发送一张新面板",
+            },
+            {
+                "id": "hub.test",
+                "title": "测试后台回调",
+                "description": "ACK 后发送一张新面板，用于验证 Interaction 和点击者 At",
+            },
+        ]
+
+    def validate_registered_actions(self, panel: object) -> None:
+        if not isinstance(panel, dict):
+            return
+        allowed = {item["id"] for item in self.get_action_catalog()}
+        for row in panel.get("rows", []):
+            if not isinstance(row, list):
+                continue
+            for button in row:
+                if (
+                    isinstance(button, dict)
+                    and int(button.get("action_type", -1)) == 1
+                    and str(button.get("data", "")) not in allowed
+                ):
+                    raise ValueError(
+                        f"后台功能未注册: {button.get('data', '')}"
+                    )
+
     async def send_panel_from_ui(self, origin: str) -> dict[str, Any]:
         origin = str(origin or "")
         if "GroupMessage" not in origin:

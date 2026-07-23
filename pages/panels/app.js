@@ -124,8 +124,13 @@ function renderForm() {
   $("users").value = (button.specified_users || []).join("\n"); $("users-wrap").hidden = button.permission !== "specified_users";
   $("reply").checked = Boolean(button.reply); $("enter").checked = Boolean(button.enter); $("anchor").checked = button.anchor === 1;
   $("unsupport-tips").value = button.unsupport_tips || "当前 QQ 版本不支持该按钮";
+  $("action-wrap").hidden = button.action_type !== 1;
   $("command-wrap").hidden = button.action_type !== 2;
-  $("data-label").textContent = button.action_type === 0 ? "HTTPS 跳转地址" : button.action_type === 1 ? "Hub 后台 action_id" : "写入聊天框的指令/文字";
+  $("data-wrap").hidden = button.action_type === 1;
+  $("data-label").textContent = button.action_type === 0 ? "HTTPS 跳转地址" : "写入聊天框的指令/文字";
+  const action = (state.action_catalog || []).find((item) => item.id === button.data);
+  $("action-preset").value = action?.id || "";
+  $("action-meta").textContent = action ? action.description : "当前 action_id 未注册，保存或点击时会被拒绝";
   const catalog = matchingCatalogCommand(button.data || "");
   $("command-preset").value = catalog?.command || "";
   $("command-meta").textContent = catalog ? `${catalog.permission === "admin" ? "仅管理员 · " : ""}${catalog.parameters || "无参数"}${catalog.description ? ` · ${catalog.description}` : ""}` : "";
@@ -133,7 +138,14 @@ function renderForm() {
 function editSelected() {
   const button = selectedButton(); if (!button) return;
   button.label = $("label").value; button.visited_label = $("visited-label").value; button.style = Number($("style").value);
-  button.action_type = Number($("action-type").value); button.data = $("data").value; button.permission = $("permission").value;
+  const oldType = button.action_type, newType = Number($("action-type").value);
+  button.action_type = newType;
+  if (newType !== oldType) {
+    if (newType === 1) button.data = state.action_catalog?.[0]?.id || "hub.test";
+    else if (newType === 0) button.data = "https://example.com";
+    else button.data = "/myrss list";
+  } else if (newType !== 1) button.data = $("data").value;
+  button.permission = $("permission").value;
   button.specified_users = $("users").value.split("\n").map((item) => item.trim()).filter(Boolean);
   button.reply = $("reply").checked; button.enter = $("enter").checked; button.anchor = $("anchor").checked ? 1 : 0;
   button.unsupport_tips = $("unsupport-tips").value; render();
@@ -142,6 +154,11 @@ function ensureRow(panel) { if (!panel.rows.length || panel.rows.at(-1).length >
 async function load() {
   await bridge.ready(); state = await bridge.apiGet("bootstrap"); const groups = $("group"); groups.innerHTML = "";
   for (const item of Object.values(state.observed_groups)) { const option = document.createElement("option"); option.value = item.origin; option.textContent = item.origin; groups.append(option); }
+  const actionPreset = $("action-preset");
+  for (const item of state.action_catalog || []) {
+    const option = document.createElement("option"); option.value = item.id; option.textContent = item.title;
+    actionPreset.append(option);
+  }
   const preset = $("command-preset");
   for (const item of state.command_catalog || []) {
     const option = document.createElement("option"); option.value = item.command;
@@ -217,6 +234,10 @@ $("markdown-apply").onclick = () => {
 $("markdown-modal").addEventListener("click", (event) => { if (event.target === $("markdown-modal")) closeMarkdownEditor(); });
 window.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("markdown-modal").hidden) closeMarkdownEditor(); });
 ["label", "visited-label", "style", "action-type", "data", "permission", "users", "reply", "enter", "anchor", "unsupport-tips"].forEach((id) => $(id).addEventListener("input", editSelected));
+$("action-preset").addEventListener("change", () => {
+  const button = selectedButton(); if (!button || !$("action-preset").value) return;
+  button.data = $("action-preset").value; render();
+});
 $("command-preset").addEventListener("change", () => {
   const button = selectedButton(); if (!button || !$("command-preset").value) return;
   button.data = $("command-preset").value;
