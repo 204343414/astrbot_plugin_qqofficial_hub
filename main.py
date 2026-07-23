@@ -114,7 +114,7 @@ class QQOfficialHubPlugin(Star):
         client = client or self._get_qq_client(origin)
         snapshot = await self.store.bootstrap()
         panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
-        nonce = await self.store.issue_panel_card(origin, panel)
+        nonce = await self.store.issue_panel_card(origin, panel, reply_msg_id=msg_id)
         rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
         payload = {
             "group_openid": origin.split(":", 2)[-1],
@@ -141,10 +141,11 @@ class QQOfficialHubPlugin(Star):
         if not group_openid:
             return 1
         origin = f"{client.platform.meta().id}:GroupMessage:{group_openid}"
-        button = await self.store.get_issued_button(origin, nonce, button_id)
-        if button is None:
+        issued = await self.store.get_issued_button_context(origin, nonce, button_id)
+        if issued is None:
             logger.warning("[QQHub] Rejected stale/cross-group callback button=%s", button_id)
             return 3
+        button, reply_msg_id = issued
         member = str(getattr(interaction, "group_member_openid", "") or "")
         policy = button["permission"]
         if policy == "specified_users" and member not in button["specified_users"]:
@@ -156,8 +157,13 @@ class QQOfficialHubPlugin(Star):
         action = str(button["data"])
         logger.info("[QQHub] Callback action=%s group=%s member=%s", action, group_openid, member[-8:])
         if action == "hub.refresh":
+            # Interaction.id is valid for ACK, but QQ rejected it as a group
+            # message event_id in production. Reuse the original user command
+            # msg_id instead; QQ treats that as a passive reply while valid.
+            if not reply_msg_id:
+                return 1
             task = asyncio.create_task(
-                self._send_configured_panel(origin, client=client, event_id=str(interaction.id))
+                self._send_configured_panel(origin, client=client, msg_id=reply_msg_id)
             )
             task.add_done_callback(self._log_refresh_failure)
         elif action != "hub.test":

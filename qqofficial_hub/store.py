@@ -127,7 +127,9 @@ class PanelStore:
             return copy.deepcopy(normalized)
 
 
-    async def issue_panel_card(self, origin: str, panel: dict[str, Any]) -> str:
+    async def issue_panel_card(
+        self, origin: str, panel: dict[str, Any], reply_msg_id: str | None = None
+    ) -> str:
         """Persist an opaque, group-scoped snapshot before sending a callback card."""
         import secrets
         import time
@@ -140,11 +142,18 @@ class PanelStore:
             for key, item in list(cards.items()):
                 if not isinstance(item, dict) or int(item.get("expires_at", 0)) <= now:
                     cards.pop(key, None)
-            cards[nonce] = {"origin": origin, "expires_at": now + 900, "panel": copy.deepcopy(panel)}
+            cards[nonce] = {
+                "origin": origin,
+                "expires_at": now + 900,
+                "panel": copy.deepcopy(panel),
+                "reply_msg_id": str(reply_msg_id or ""),
+            }
             self._write_atomic(self._data)
             return nonce
 
-    async def get_issued_button(self, origin: str, nonce: str, button_id: str) -> dict[str, Any] | None:
+    async def get_issued_button_context(
+        self, origin: str, nonce: str, button_id: str
+    ) -> tuple[dict[str, Any], str] | None:
         import time
         async with self._lock:
             item = self._data["issued_test_cards"].get(nonce)
@@ -157,8 +166,12 @@ class PanelStore:
                 if isinstance(row, list):
                     for button in row:
                         if isinstance(button, dict) and button.get("id") == button_id:
-                            return copy.deepcopy(button)
+                            return copy.deepcopy(button), str(item.get("reply_msg_id") or "")
             return None
+
+    async def get_issued_button(self, origin: str, nonce: str, button_id: str) -> dict[str, Any] | None:
+        context = await self.get_issued_button_context(origin, nonce, button_id)
+        return context[0] if context else None
 
     async def issue_test_card(self, origin: str) -> str:
         """Persist a short-lived opaque callback capability before sending."""

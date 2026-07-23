@@ -36,7 +36,9 @@ def test_issued_panel_button_is_scoped_to_its_group():
             store = PanelStore(Path(temp))
             origin = "头条flag:GroupMessage:group-a"
             panel = (await store.bootstrap())["templates"]["default_panel"]
-            nonce = await store.issue_panel_card(origin, panel)
+            nonce = await store.issue_panel_card(origin, panel, reply_msg_id="user-msg-1")
+            context = await store.get_issued_button_context(origin, nonce, "refresh")
+            assert context is not None and context[1] == "user-msg-1"
             assert await store.get_issued_button(origin, nonce, "refresh") is not None
             assert await store.get_issued_button("头条flag:GroupMessage:group-b", nonce, "refresh") is None
     asyncio.run(scenario())
