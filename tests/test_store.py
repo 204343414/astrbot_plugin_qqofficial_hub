@@ -44,39 +44,56 @@ def test_issued_panel_button_is_scoped_to_its_group():
     asyncio.run(scenario())
 
 
-def test_blueprint_rejects_edges_to_missing_nodes_and_persists_valid_graph():
+def test_command_button_supports_reply_enter_and_anchor_fields():
+    panel = {
+        "name": "高级按钮",
+        "markdown": "# 标题\n[🔗文档](https://bot.q.qq.com/)",
+        "rows": [[{
+            "id": "pick-image",
+            "label": "选择图片",
+            "visited_label": "已选择",
+            "style": 1,
+            "action_type": 2,
+            "data": "/draw ",
+            "permission": "everyone",
+            "reply": True,
+            "enter": False,
+            "anchor": 1,
+            "unsupport_tips": "请升级手机QQ",
+        }]],
+    }
+    button = validate_panel(panel)["rows"][0][0]
+    assert button["anchor"] == 1
+    assert button["reply"] is True
+    assert button["unsupport_tips"] == "请升级手机QQ"
+
+
+def test_markdown_image_limits_and_link_label_are_validated():
+    valid = {
+        "name": "图片",
+        "markdown": "![封面 #720px #1080px](https://example.com/a.png)\n[🔗打开](https://example.com)",
+        "rows": [],
+    }
+    validate_panel(valid)
+    invalid_size = {**valid, "markdown": "![封面 #721px #100px](https://example.com/a.png)"}
+    with pytest.raises(ValueError, match="图片尺寸"):
+        validate_panel(invalid_size)
+    invalid_link = {**valid, "markdown": "[打开](https://example.com)"}
+    with pytest.raises(ValueError, match="必须以"):
+        validate_panel(invalid_link)
+
+
+def test_saved_revision_invalidates_previously_issued_callback_card():
     async def scenario():
         with tempfile.TemporaryDirectory() as temp:
             store = PanelStore(Path(temp))
-            graph = {
-                "viewport": {"x": 0, "y": 0, "scale": 1},
-                "nodes": [
-                    {"id": "root", "type": "panel", "title": "主菜单", "x": 0, "y": 0},
-                    {"id": "rss", "type": "panel", "title": "RSS", "x": 100, "y": 0},
-                ],
-                "edges": [{"from": "root", "to": "rss"}],
-            }
-            saved = await store.save_blueprint(graph)
-            assert saved["edges"] == [{"from": "root", "to": "rss"}]
-            graph["edges"] = [{"from": "root", "to": "missing"}]
-            with pytest.raises(ValueError, match="已有节点"):
-                await store.save_blueprint(graph)
+            origin = "头条flag:GroupMessage:group-a"
+            await store.observe_group(origin, "头条flag")
+            panel = (await store.bootstrap())["templates"]["default_panel"]
+            nonce = await store.issue_panel_card(origin, panel)
+            assert await store.get_issued_button(origin, nonce, "refresh") is not None
+            changed = dict(panel)
+            changed["name"] = "新版本"
+            await store.save_panel("global", "", changed)
+            assert await store.get_issued_button(origin, nonce, "refresh") is None
     asyncio.run(scenario())
-
-from qqofficial_hub.blueprint import parse_blueprint
-
-
-def test_blueprint_runtime_requires_one_root_panel_and_one_edge_per_button():
-    valid = {
-        "root_node_id": "root",
-        "nodes": [
-            {"id": "root", "type": "panel", "title": "主菜单"},
-            {"id": "rss", "type": "panel", "title": "RSS"},
-        ],
-        "edges": [{"from": "root", "button_id": "rss-button", "to": "rss"}],
-    }
-    graph = parse_blueprint(valid)
-    assert graph.target_for("root", "rss-button") == "rss"
-    valid["edges"].append({"from": "root", "button_id": "rss-button", "to": "root"})
-    with pytest.raises(ValueError, match="只能连接一个"):
-        parse_blueprint(valid)

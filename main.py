@@ -16,14 +16,18 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.1.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.2.0", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
         self.context = context
         self.config = config
-        self.store = PanelStore(StarTools.get_data_dir(PLUGIN_NAME))
-        self.web = HubWebController(context, self.store)
+        self.callback_ttl_seconds = max(int(config.get("callback_ttl_hours", 24)), 1) * 3600
+        self.store = PanelStore(
+            StarTools.get_data_dir(PLUGIN_NAME),
+            callback_ttl_seconds=self.callback_ttl_seconds,
+        )
+        self.web = HubWebController(context, self.store, self)
         self.web.register_routes()
         self.experimental_bridge = bool(config.get("experimental_interaction_bridge", False))
         self.bridge_generation: int | None = None
@@ -50,14 +54,18 @@ class QQOfficialHubPlugin(Star):
         if platform is not None and platform.meta().name == "qq_official":
             await self.store.observe_group(origin, platform_id)
 
-    @filter.command("头条卡片", desc="发送 QQ Official Hub 白板测试卡")
+    @filter.command_group("qqhub")
+    def qqhub(self):
+        pass
+
+    @qqhub.command("面板")
     async def send_default_panel(self, event: AstrMessageEvent):
         # This is a control command, never an LLM prompt. AstrBot continues the
         # pipeline unless a command handler explicitly stops the event.
         event.stop_event()
         origin = str(event.unified_msg_origin or "")
         if "GroupMessage" not in origin:
-            yield event.plain_result("头条卡片目前仅支持 QQ Official 群聊。")
+            yield event.plain_result("/qqhub 面板 目前仅支持 QQ Official 群聊。")
             return
         if not self.experimental_bridge:
             yield event.plain_result("测试卡尚未启用。请在 Hub 配置中开启「实验性 QQ Interaction 测试桥」，然后完整重启 AstrBot。")
@@ -67,6 +75,20 @@ class QQOfficialHubPlugin(Star):
         except Exception as exc:
             logger.exception("[QQHub] Failed to send whiteboard")
             yield event.plain_result(f"测试卡发送失败：{type(exc).__name__}: {exc}")
+
+    async def send_panel_from_ui(self, origin: str) -> dict[str, Any]:
+        origin = str(origin or "")
+        if "GroupMessage" not in origin:
+            raise ValueError("测试目标必须是已观察到的群会话")
+        snapshot = await self.store.bootstrap()
+        panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
+        if not self.experimental_bridge and any(
+            int(button.get("action_type", -1)) == 1
+            for row in panel.get("rows", []) for button in row
+        ):
+            raise ValueError("当前卡片包含后台回调按钮；请启用 Interaction 兼容桥并完整重启后再测试")
+        await self._send_configured_panel(origin)
+        return {"sent": True, "origin": origin}
 
     def _get_qq_client(self, origin: str):
         platform_id = origin.split(":", 1)[0]
@@ -102,9 +124,10 @@ class QQOfficialHubPlugin(Star):
                 "type": action_type,
                 "permission": cls._permission_payload(button),
                 "data": data,
-                "reply": False,
-                "enter": False,
-                "unsupport_tips": "当前 QQ 版本不支持该按钮",
+                "reply": bool(button.get("reply", False)),
+                "enter": bool(button.get("enter", False)),
+                "anchor": int(button.get("anchor", 0) or 0),
+                "unsupport_tips": str(button.get("unsupport_tips") or "当前 QQ 版本不支持该按钮"),
             },
         }
 
@@ -145,7 +168,7 @@ class QQOfficialHubPlugin(Star):
         if issued is None:
             logger.warning("[QQHub] Rejected stale/cross-group callback button=%s", button_id)
             return 3
-        button, reply_msg_id = issued
+        button, _reply_msg_id = issued
         member = str(getattr(interaction, "group_member_openid", "") or "")
         policy = button["permission"]
         if policy == "specified_users" and member not in button["specified_users"]:
@@ -157,13 +180,10 @@ class QQOfficialHubPlugin(Star):
         action = str(button["data"])
         logger.info("[QQHub] Callback action=%s group=%s member=%s", action, group_openid, member[-8:])
         if action == "hub.refresh":
-            # Interaction.id is valid for ACK, but QQ rejected it as a group
-            # message event_id in production. Reuse the original user command
-            # msg_id instead; QQ treats that as a passive reply while valid.
-            if not reply_msg_id:
-                return 1
+            # Callback ACK is separate from chat output. Send a fresh active panel;
+            # reusing the original msg_id would expire after QQ's passive window.
             task = asyncio.create_task(
-                self._send_configured_panel(origin, client=client, msg_id=reply_msg_id)
+                self._send_configured_panel(origin, client=client)
             )
             task.add_done_callback(self._log_refresh_failure)
         elif action != "hub.test":

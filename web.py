@@ -11,14 +11,15 @@ PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
 class HubWebController:
-    def __init__(self, context: Context, store: PanelStore) -> None:
+    def __init__(self, context: Context, store: PanelStore, plugin: Any) -> None:
         self.context = context
         self.store = store
+        self.plugin = plugin
 
     def register_routes(self) -> None:
         self.context.register_web_api(f"/{PLUGIN_NAME}/bootstrap", self.bootstrap, ["GET"], "QQ Hub editor bootstrap")
         self.context.register_web_api(f"/{PLUGIN_NAME}/panel", self.save_panel, ["POST"], "Save QQ Hub panel")
-        self.context.register_web_api(f"/{PLUGIN_NAME}/blueprint", self.save_blueprint, ["POST"], "Save Hub blueprint")
+        self.context.register_web_api(f"/{PLUGIN_NAME}/send-test", self.send_test, ["POST"], "Send panel to an observed QQ group")
 
     async def bootstrap(self):
         return json_response(await self.store.bootstrap())
@@ -33,10 +34,10 @@ class HubWebController:
             return error_response(str(exc), status_code=400)
         return json_response({"panel": panel})
 
-    async def save_blueprint(self):
+    async def send_test(self):
         payload: dict[str, Any] = await request.json(default={})
         try:
-            blueprint = await self.store.save_blueprint(payload.get("blueprint"))
-        except ValueError as exc:
+            result = await self.plugin.send_panel_from_ui(str(payload.get("origin", "")))
+        except (ValueError, RuntimeError) as exc:
             return error_response(str(exc), status_code=400)
-        return json_response({"blueprint": blueprint})
+        return json_response(result)

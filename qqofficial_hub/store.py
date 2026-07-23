@@ -21,8 +21,8 @@ def empty_panel() -> dict[str, Any]:
     """A visible, safe default that doubles as the first QQ capability probe."""
     return {
         "id": PANEL_ID,
-        "name": "QQ Official Hub 白板测试卡",
-        "markdown": "# QQ Official Hub 白板测试卡\n每个按钮演示一种 QQ 官方能力；后台按钮 15 分钟后失效。",
+        "name": "QQ Official Hub 能力测试卡",
+        "markdown": "# QQ Official Hub 能力测试卡\n**Markdown 正文**、[🔗蓝色链接](https://bot.q.qq.com/) 与最多 5×5 个按钮。",
         "rows": [
             [
                 {"id": "blue_everyone", "label": "蓝色：所有人可点", "visited_label": "蓝色：所有人可点", "style": 1, "action_type": 1, "data": "hub.test", "permission": "everyone", "specified_users": []},
@@ -33,7 +33,7 @@ def empty_panel() -> dict[str, Any]:
                 {"id": "manager", "label": "仅群管理可点", "visited_label": "仅群管理可点", "style": 0, "action_type": 1, "data": "hub.test", "permission": "group_manager", "specified_users": []},
             ],
             [
-                {"id": "insert", "label": "放入输入框，不发送", "visited_label": "放入输入框，不发送", "style": 0, "action_type": 2, "data": "/头条卡片", "permission": "everyone", "specified_users": []},
+                {"id": "insert", "label": "放入输入框，不发送", "visited_label": "放入输入框，不发送", "style": 0, "action_type": 2, "data": "/qqhub 面板", "permission": "everyone", "specified_users": []},
                 {"id": "docs", "label": "打开 QQ 按钮文档", "visited_label": "打开 QQ 按钮文档", "style": 1, "action_type": 0, "data": "https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/trans/msg-btn.html", "permission": "everyone", "specified_users": []},
             ],
         ],
@@ -41,57 +41,11 @@ def empty_panel() -> dict[str, Any]:
     }
 
 
-NODE_TYPES = {"panel", "command", "url", "action", "confirm"}
-
-
-def default_blueprint() -> dict[str, Any]:
-    return {
-        "version": 1,
-        "viewport": {"x": 80, "y": 80, "scale": 1},
-        "nodes": [
-            {"id": "root", "type": "panel", "title": "头条主菜单", "x": 0, "y": 0, "panel_id": PANEL_ID}
-        ],
-        "edges": [],
-    }
-
-
-def validate_blueprint(value: object) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ValueError("蓝图必须是对象")
-    raw_nodes = value.get("nodes", [])
-    raw_edges = value.get("edges", [])
-    viewport = value.get("viewport", {})
-    if not isinstance(raw_nodes, list) or len(raw_nodes) > 200:
-        raise ValueError("蓝图节点数量必须在 0 到 200 之间")
-    if not isinstance(raw_edges, list) or len(raw_edges) > 400:
-        raise ValueError("蓝图连线数量必须在 0 到 400 之间")
-    nodes, node_ids = [], set()
-    for item in raw_nodes:
-        if not isinstance(item, dict):
-            raise ValueError("蓝图节点格式错误")
-        node_id = _text(item.get("id"), "节点 ID", 80)
-        if node_id in node_ids:
-            raise ValueError("蓝图节点 ID 必须唯一")
-        node_ids.add(node_id)
-        node_type = item.get("type")
-        if node_type not in NODE_TYPES:
-            raise ValueError("未知蓝图节点类型")
-        nodes.append({"id": node_id, "type": node_type, "title": _text(item.get("title"), "节点名称", 80), "x": float(item.get("x", 0)), "y": float(item.get("y", 0)), "panel_id": str(item.get("panel_id") or "")})
-    edges = []
-    for edge in raw_edges:
-        if not isinstance(edge, dict) or edge.get("from") not in node_ids or edge.get("to") not in node_ids:
-            raise ValueError("蓝图连线必须连接已有节点")
-        if edge["from"] != edge["to"]:
-            edges.append({"from": edge["from"], "to": edge["to"]})
-    if not isinstance(viewport, dict):
-        viewport = {}
-    scale = float(viewport.get("scale", 1))
-    return {"version": 1, "viewport": {"x": float(viewport.get("x", 80)), "y": float(viewport.get("y", 80)), "scale": max(0.25, min(scale, 2.5))}, "nodes": nodes, "edges": edges}
-
 
 class PanelStore:
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, callback_ttl_seconds: int = 86400) -> None:
         self.data_dir = data_dir
+        self.callback_ttl_seconds = max(int(callback_ttl_seconds), 60)
         self.path = data_dir / "panels.json"
         self._lock = asyncio.Lock()
         self._data: dict[str, Any] = self._load()
@@ -103,7 +57,6 @@ class PanelStore:
             "group_overrides": {},
             "observed_groups": {},
             "issued_test_cards": {},
-            "blueprint": default_blueprint(),
         }
 
     def _load(self) -> dict[str, Any]:
@@ -122,7 +75,6 @@ class PanelStore:
         value.setdefault("group_overrides", {})
         value.setdefault("observed_groups", {})
         value.setdefault("issued_test_cards", {})
-        value.setdefault("blueprint", default_blueprint())
         default = value["templates"].get(PANEL_ID)
         if isinstance(default, dict) and default.get("name") == "头条卡片" and not default.get("rows"):
             value["templates"][PANEL_ID] = empty_panel()
@@ -148,14 +100,6 @@ class PanelStore:
     async def bootstrap(self) -> dict[str, Any]:
         async with self._lock:
             return copy.deepcopy(self._data)
-
-
-    async def save_blueprint(self, blueprint: object) -> dict[str, Any]:
-        normalized = validate_blueprint(blueprint)
-        async with self._lock:
-            self._data["blueprint"] = normalized
-            self._write_atomic(self._data)
-            return copy.deepcopy(normalized)
 
     async def observe_group(self, origin: str, platform_id: str) -> None:
         if not self._valid_group_origin(origin):
@@ -202,7 +146,7 @@ class PanelStore:
                     cards.pop(key, None)
             cards[nonce] = {
                 "origin": origin,
-                "expires_at": now + 900,
+                "expires_at": now + self.callback_ttl_seconds,
                 "panel": copy.deepcopy(panel),
                 "reply_msg_id": str(reply_msg_id or ""),
             }
@@ -220,6 +164,9 @@ class PanelStore:
             panel = item.get("panel")
             if not isinstance(panel, dict):
                 return None
+            current = self._data["group_overrides"].get(origin) or self._data["templates"].get(PANEL_ID)
+            if not isinstance(current, dict) or int(current.get("revision", 0)) != int(panel.get("revision", 0)):
+                return None
             for row in panel.get("rows", []):
                 if isinstance(row, list):
                     for button in row:
@@ -227,36 +174,11 @@ class PanelStore:
                             return copy.deepcopy(button), str(item.get("reply_msg_id") or "")
             return None
 
-    async def get_issued_button(self, origin: str, nonce: str, button_id: str) -> dict[str, Any] | None:
+    async def get_issued_button(
+        self, origin: str, nonce: str, button_id: str
+    ) -> dict[str, Any] | None:
         context = await self.get_issued_button_context(origin, nonce, button_id)
         return context[0] if context else None
-
-    async def issue_test_card(self, origin: str) -> str:
-        """Persist a short-lived opaque callback capability before sending."""
-        import secrets
-        import time
-        if not self._valid_group_origin(origin):
-            raise ValueError("测试卡只能发送到 QQ Official 群")
-        async with self._lock:
-            nonce = secrets.token_urlsafe(18)
-            now = int(time.time())
-            cards = self._data["issued_test_cards"]
-            for key, item in list(cards.items()):
-                if not isinstance(item, dict) or int(item.get("expires_at", 0)) <= now:
-                    cards.pop(key, None)
-            cards[nonce] = {"origin": origin, "expires_at": now + 900}
-            self._write_atomic(self._data)
-            return nonce
-
-    async def claim_test_action(self, origin: str, nonce: str) -> bool:
-        import time
-        async with self._lock:
-            item = self._data["issued_test_cards"].get(nonce)
-            if not isinstance(item, dict):
-                return False
-            if item.get("origin") != origin or int(item.get("expires_at", 0)) <= int(time.time()):
-                return False
-            return True
 
     def _valid_group_origin(self, origin: str) -> bool:
         parts = origin.split(":", 2)
@@ -267,7 +189,8 @@ def validate_panel(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("panel 必须是对象")
     name = _text(value.get("name"), "卡片名称", 64)
-    markdown = _text(value.get("markdown"), "Markdown", 2000)
+    markdown = _text(value.get("markdown"), "Markdown", 4000)
+    _validate_markdown(markdown)
     rows = value.get("rows")
     if not isinstance(rows, list) or len(rows) > MAX_ROWS:
         raise ValueError("按钮最多 5 行")
@@ -293,22 +216,37 @@ def _validate_button(value: object) -> dict[str, Any]:
     action_type = value.get("action_type")
     if action_type not in ACTION_TYPES:
         raise ValueError("按钮动作类型无效")
-    data = _text(value.get("data"), "动作数据", 256)
+    data_limit = 2048 if action_type == 0 else 128 if action_type == 1 else 100
+    data = _text(value.get("data"), "动作数据", data_limit)
     permission = value.get("permission")
     if permission not in PERMISSIONS:
         raise ValueError("按钮权限无效")
     users = value.get("specified_users", [])
     if permission == "specified_users":
-        if not isinstance(users, list) or not users or any(not isinstance(item, str) or not item.strip() for item in users):
-            raise ValueError("指定用户权限需要至少一个 OpenID")
+        if not isinstance(users, list) or not users or len(users) > 50 or any(not isinstance(item, str) or not item.strip() for item in users):
+            raise ValueError("指定用户权限需要 1~50 个 OpenID")
+        users = [item.strip() for item in users]
     else:
         users = []
     if action_type == 0 and not re.fullmatch(r"https://[^\s]+", data):
         raise ValueError("URL 按钮只允许 https:// 地址")
     if action_type == 1 and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", data):
         raise ValueError("后台动作必须是受控 action_id，不能填命令或脚本")
+    reply = bool(value.get("reply", False))
+    enter = bool(value.get("enter", False))
+    anchor = int(value.get("anchor", 0) or 0)
+    if anchor not in {0, 1}:
+        raise ValueError("anchor 只能是 0 或 1")
+    if action_type != 2 and (reply or enter or anchor):
+        raise ValueError("reply、enter、anchor 仅适用于插入指令按钮")
+    unsupport_tips = str(value.get("unsupport_tips") or "当前 QQ 版本不支持该按钮").strip()
+    if not unsupport_tips or len(unsupport_tips) > 80:
+        raise ValueError("不支持提示必须为 1~80 个字符")
+    button_id = str(value.get("id") or "").strip() or f"button-{label}"
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", button_id):
+        raise ValueError("按钮 ID 只能包含字母、数字、点、下划线、冒号、横线，最长80")
     return {
-        "id": str(value.get("id") or "").strip() or f"button-{label}",
+        "id": button_id,
         "label": label,
         "visited_label": visited_label,
         "style": style,
@@ -316,7 +254,29 @@ def _validate_button(value: object) -> dict[str, Any]:
         "data": data,
         "permission": permission,
         "specified_users": users,
+        "reply": reply,
+        "enter": enter,
+        "anchor": anchor,
+        "unsupport_tips": unsupport_tips,
     }
+
+
+def _validate_markdown(markdown: str) -> None:
+    """Validate the documented QQ custom-Markdown link and image forms."""
+    image_pattern = re.compile(
+        r"!\[[^\]]+\s+#(\d+)px\s+#(\d+)px\]\((https://[^\s)]+)\)"
+    )
+    for width_text, height_text, _ in image_pattern.findall(markdown):
+        width, height = int(width_text), int(height_text)
+        if width <= 0 or height <= 0 or width > 720 or height > 1080:
+            raise ValueError("Markdown 图片尺寸必须在 1~720px 宽、1~1080px 高")
+    # Any image token that did not match the complete documented form is invalid.
+    if "![" in image_pattern.sub("", markdown):
+        raise ValueError("Markdown 图片必须使用 ![说明 #宽px #高px](https://...) 格式")
+    link_pattern = re.compile(r"(?<!!)\[([^\]]+)\]\((https://[^\s)]+)\)")
+    for label, _ in link_pattern.findall(markdown):
+        if not label.startswith("🔗"):
+            raise ValueError("Markdown 蓝色链接的显示文字必须以 🔗 开头")
 
 
 def _text(value: object, name: str, max_length: int) -> str:

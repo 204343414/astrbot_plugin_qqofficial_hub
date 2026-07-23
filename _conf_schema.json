@@ -1,19 +1,13 @@
 {
-  "default_panel_name": {
-    "description": "默认卡片名称",
-    "hint": "首版默认命令 /头条卡片 对应的显示名称。实际按钮布局将在 Hub Web UI 中配置。",
-    "type": "string",
-    "default": "头条卡片"
-  },
   "callback_ttl_hours": {
-    "description": "无害后台按钮有效期（小时）",
-    "hint": "配置修改后旧卡立即失效。当前仅预留设置，等待 QQ Official Interaction 适配器支持后启用。",
+    "description": "后台回调按钮有效期（小时）",
+    "hint": "卡片保存新版本后，旧版本后台按钮立即失效；到期按钮返回重复/失效状态。",
     "type": "int",
     "default": 24
   },
   "experimental_interaction_bridge": {
-    "description": "启用实验性 QQ Interaction 测试桥",
-    "hint": "仅用于 /头条卡片 白板验收。开启或关闭后都必须完整重启 AstrBot；它会运行时接入 QQ Official Adapter，但不会修改磁盘源码。未完成真实验证前，不会连接 MyRSS、退订或其他业务动作。",
+    "description": "启用 QQ Official Interaction 兼容桥",
+    "hint": "启用或关闭后必须完整重启 AstrBot。桥接 interaction intent、回调去重和 ACK；不修改磁盘中的 AstrBot 源码。若当前 AppID 无 Interaction Intent 权限，请关闭后重启。",
     "type": "bool",
     "default": false
   }
