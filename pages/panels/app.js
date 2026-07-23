@@ -35,11 +35,15 @@ function renderInline(target, text) {
       command.onclick = () => setNotice(command.title);
       target.append(command);
     } else if (match[4]) {
+      const width = Math.min(Number(match[5]), 720), height = Math.min(Number(match[6]), 1080);
+      const frame = document.createElement("span");
+      frame.className = "markdown-image-frame";
+      frame.style.width = `${width}px`;
+      frame.style.aspectRatio = `${width} / ${height}`;
       const image = document.createElement("img");
       image.alt = match[4]; image.src = safeUrl(match[7]);
-      image.style.width = `${Math.min(Number(match[5]), 720)}px`;
-      image.style.maxHeight = `${Math.min(Number(match[6]), 1080)}px`;
-      image.referrerPolicy = "no-referrer"; target.append(image);
+      image.referrerPolicy = "no-referrer";
+      frame.append(image); target.append(frame);
     } else if (match[8]) {
       const link = document.createElement("a"); link.textContent = match[8]; link.href = safeUrl(match[9]); link.target = "_blank"; link.rel = "noopener noreferrer"; target.append(link);
     } else if (match[10]) {
@@ -157,7 +161,24 @@ function insertMarkdownSnippet(snippet) {
 ["name", "markdown"].forEach((id) => $(id).addEventListener("input", () => { const panel = editablePanel(); panel[id] = $(id).value; render(); }));
 $("mention-clicker").addEventListener("input", () => { editablePanel().mention_clicker = $("mention-clicker").checked; render(); });
 $("insert-link").onclick = () => insertMarkdownSnippet("[🔗链接文字](https://example.com)");
-$("insert-image").onclick = () => insertMarkdownSnippet("![图片说明 #618px #249px](https://example.com/image.png)");
+$("insert-image").onclick = () => {
+  const url = safeUrl($("image-url").value.trim());
+  const alt = $("image-alt").value.trim() || "图片";
+  const maxWidth = Math.max(1, Math.min(Number($("image-max-width").value) || 720, 720));
+  if (!url) { setNotice("请输入可公开访问的 HTTPS 图片 URL", true); return; }
+  const probe = new Image();
+  probe.onload = () => {
+    if (!probe.naturalWidth || !probe.naturalHeight) { setNotice("无法读取图片真实尺寸", true); return; }
+    const scale = Math.min(1, maxWidth / probe.naturalWidth, 1080 / probe.naturalHeight);
+    const width = Math.max(1, Math.round(probe.naturalWidth * scale));
+    const height = Math.max(1, Math.round(probe.naturalHeight * scale));
+    insertMarkdownSnippet(`![${alt} #${width}px #${height}px](${url})`);
+    setNotice(`已按真实尺寸 ${probe.naturalWidth}×${probe.naturalHeight} 等比例插入为 ${width}×${height}`);
+  };
+  probe.onerror = () => setNotice("浏览器无法加载该图片；请检查公网访问、HTTPS、防盗链或URL有效期", true);
+  probe.referrerPolicy = "no-referrer";
+  probe.src = url;
+};
 $("insert-cmd-input").onclick = () => {
   const text = $("cmd-text").value.trim(), show = $("cmd-show").value.trim() || text;
   if (!text) { setNotice("写入输入框的内容不能为空", true); return; }
