@@ -63,7 +63,7 @@ class QQOfficialHubPlugin(Star):
             yield event.plain_result("测试卡尚未启用。请在 Hub 配置中开启「实验性 QQ Interaction 测试桥」，然后完整重启 AstrBot。")
             return
         try:
-            await self._send_configured_panel(origin)
+            await self._send_configured_panel(origin, msg_id=str(event.message_obj.message_id))
         except Exception as exc:
             logger.exception("[QQHub] Failed to send whiteboard")
             yield event.plain_result(f"测试卡发送失败：{type(exc).__name__}: {exc}")
@@ -108,19 +108,26 @@ class QQOfficialHubPlugin(Star):
             },
         }
 
-    async def _send_configured_panel(self, origin: str, client=None) -> None:
+    async def _send_configured_panel(
+        self, origin: str, client=None, msg_id: str | None = None, event_id: str | None = None
+    ) -> None:
         client = client or self._get_qq_client(origin)
         snapshot = await self.store.bootstrap()
         panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
         nonce = await self.store.issue_panel_card(origin, panel)
         rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
-        await client.api.post_group_message(
-            group_openid=origin.split(":", 2)[-1],
-            msg_type=2,
-            markdown={"content": panel["markdown"]},
-            keyboard={"content": {"rows": rows}},
-            msg_seq=random.randint(1, 10000),
-        )
+        payload = {
+            "group_openid": origin.split(":", 2)[-1],
+            "msg_type": 2,
+            "markdown": {"content": panel["markdown"]},
+            "keyboard": {"content": {"rows": rows}},
+            "msg_seq": random.randint(1, 10000),
+        }
+        if msg_id:
+            payload["msg_id"] = msg_id
+        elif event_id:
+            payload["event_id"] = event_id
+        await client.api.post_group_message(**payload)
         logger.info("[QQHub] Configured panel sent to %s revision=%s", origin, panel.get("revision"))
 
     async def _handle_interaction(self, client: Any, interaction: Any) -> int:
@@ -149,7 +156,9 @@ class QQOfficialHubPlugin(Star):
         action = str(button["data"])
         logger.info("[QQHub] Callback action=%s group=%s member=%s", action, group_openid, member[-8:])
         if action == "hub.refresh":
-            task = asyncio.create_task(self._send_configured_panel(origin, client=client))
+            task = asyncio.create_task(
+                self._send_configured_panel(origin, client=client, event_id=str(interaction.id))
+            )
             task.add_done_callback(self._log_refresh_failure)
         elif action != "hub.test":
             return 1
