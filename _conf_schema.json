@@ -1,0 +1,9 @@
+{
+  "default": {
+    "metadata": {
+      "name": "QQ Official Hub",
+      "description": "QQ Official Keyboard 面板中枢。首版仅保留安全引导配置。"
+    },
+    "items": {}
+  }
+}
