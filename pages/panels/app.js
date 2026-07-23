@@ -53,8 +53,8 @@ function renderInline(target, text) {
   }
   target.append(document.createTextNode(text.slice(cursor)));
 }
-function renderMarkdown(text) {
-  const root = $("preview-markdown"); root.innerHTML = "";
+function renderMarkdown(text, targetId = "preview-markdown") {
+  const root = $(targetId); root.innerHTML = "";
   for (const raw of String(text || "").split("\n")) {
     let line = raw, tag = "p";
     if (line.startsWith("### ")) { tag = "h3"; line = line.slice(4); }
@@ -164,6 +164,23 @@ $("insert-cmd-input").onclick = () => {
   const reference = $("cmd-reference").checked ? "true" : "false";
   insertMarkdownSnippet(`<qqbot-cmd-input text="${encodeURIComponent(text)}" show="${encodeURIComponent(show)}" reference="${reference}" />`);
 };
+function openMarkdownEditor() {
+  $("markdown-full").value = editablePanel().markdown;
+  renderMarkdown($("markdown-full").value, "markdown-full-preview");
+  $("markdown-modal").hidden = false;
+  $("markdown-full").focus();
+}
+function closeMarkdownEditor() { $("markdown-modal").hidden = true; }
+$("fullscreen-markdown").onclick = openMarkdownEditor;
+$("markdown-full").addEventListener("input", () => renderMarkdown($("markdown-full").value, "markdown-full-preview"));
+$("markdown-cancel").onclick = closeMarkdownEditor;
+$("markdown-apply").onclick = () => {
+  editablePanel().markdown = $("markdown-full").value;
+  $("markdown").value = editablePanel().markdown;
+  closeMarkdownEditor(); render(); setNotice("正文已应用到当前编辑状态；点击保存后才会持久化。");
+};
+$("markdown-modal").addEventListener("click", (event) => { if (event.target === $("markdown-modal")) closeMarkdownEditor(); });
+window.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("markdown-modal").hidden) closeMarkdownEditor(); });
 ["label", "visited-label", "style", "action-type", "data", "permission", "users", "reply", "enter", "anchor", "unsupport-tips"].forEach((id) => $(id).addEventListener("input", editSelected));
 $("scope").onchange = () => { selected = null; $("group-wrap").hidden = $("scope").value !== "group"; render(); };
 $("group").onchange = () => { selected = null; render(); };
