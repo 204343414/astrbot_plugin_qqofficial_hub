@@ -157,7 +157,7 @@ class PanelStore:
 
     async def get_issued_button_context(
         self, origin: str, nonce: str, button_id: str
-    ) -> tuple[dict[str, Any], str] | None:
+    ) -> tuple[dict[str, Any], str, bool] | None:
         import time
         async with self._lock:
             item = self._data["issued_test_cards"].get(nonce)
@@ -173,7 +173,11 @@ class PanelStore:
                 if isinstance(row, list):
                     for button in row:
                         if isinstance(button, dict) and button.get("id") == button_id:
-                            return copy.deepcopy(button), str(item.get("reply_msg_id") or "")
+                            return (
+                                copy.deepcopy(button),
+                                str(item.get("reply_msg_id") or ""),
+                                bool(panel.get("mention_clicker", False)),
+                            )
             return None
 
     async def get_issued_button(

@@ -11,7 +11,14 @@ from astrbot.api.platform import AstrBotMessage, MessageMember, MessageType
 class HubSyntheticCommandEvent(AstrMessageEvent):
     """QQ group event whose replies are sent proactively, without fake msg_id."""
 
-    def __init__(self, command: str, adapter: Any, client: Any, interaction: Any):
+    def __init__(
+        self,
+        command: str,
+        adapter: Any,
+        client: Any,
+        interaction: Any,
+        mention_openid: str = "",
+    ):
         group_openid = str(getattr(interaction, "group_openid", "") or "")
         member_openid = str(
             getattr(interaction, "group_member_openid", "") or ""
@@ -29,8 +36,18 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         super().__init__(command, message, adapter.meta(), group_openid)
         self.bot = client
         self._adapter = adapter
+        self._mention_openid = mention_openid
 
     async def send(self, message: MessageChain) -> None:
+        if self._mention_openid:
+            message = MessageChain(
+                chain=[
+                    Plain(f'<qqbot-at-user id="{self._mention_openid}" />\n'),
+                    *message.chain,
+                ],
+                use_t2i_=message.use_t2i_,
+                type=message.type,
+            )
         await super().send(message)
         await self._adapter.send_by_session(self.session, message)
 
@@ -52,9 +69,16 @@ def dispatch_registered_command(
     client: Any,
     interaction: Any,
     command: str,
+    mention_openid: str = "",
 ) -> None:
     adapter = getattr(client, "platform", None)
     if adapter is None:
         raise RuntimeError("QQ client has no bound AstrBot platform")
-    event = HubSyntheticCommandEvent(command, adapter, client, interaction)
+    event = HubSyntheticCommandEvent(
+        command,
+        adapter,
+        client,
+        interaction,
+        mention_openid=mention_openid,
+    )
     adapter.commit_event(event)

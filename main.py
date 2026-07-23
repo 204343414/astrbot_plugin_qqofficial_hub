@@ -134,6 +134,11 @@ class QQOfficialHubPlugin(Star):
                     context.client,
                     context.interaction,
                     full_command,
+                    mention_openid=(
+                        context.member_openid
+                        if context.mention_clicker
+                        else ""
+                    ),
                 )
                 return 0
 
@@ -306,7 +311,7 @@ class QQOfficialHubPlugin(Star):
         if issued is None:
             logger.warning("[QQHub] Rejected stale/cross-group callback button=%s", button_id)
             return 3
-        button, _reply_msg_id = issued
+        button, _reply_msg_id, mention_clicker = issued
         member = str(getattr(interaction, "group_member_openid", "") or "")
         policy = button["permission"]
         if policy == "specified_users" and member not in button["specified_users"]:
@@ -332,6 +337,7 @@ class QQOfficialHubPlugin(Star):
             origin=origin,
             group_openid=group_openid,
             member_openid=member,
+            mention_clicker=mention_clicker,
         )
         return await self.actions.execute(action_id, context, params)
 

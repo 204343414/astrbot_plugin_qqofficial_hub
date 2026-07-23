@@ -17,6 +17,7 @@ class ActionContext:
     origin: str
     group_openid: str
     member_openid: str
+    mention_clicker: bool = False
 
 
 @dataclass(frozen=True, slots=True)
