@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import random
 import re
 from typing import Any
@@ -16,6 +17,8 @@ from .qqofficial_hub.action_registry import (
     ActionSpec,
     get_action_registry,
 )
+from .qqofficial_hub.command_catalog import build_command_catalog
+from .qqofficial_hub.command_dispatch import dispatch_registered_command
 from .qqofficial_hub.store import PanelStore
 from .web import HubWebController
 
@@ -71,6 +74,7 @@ class QQOfficialHubPlugin(Star):
 
     async def terminate(self) -> None:
         self.actions.unregister_owner(PLUGIN_NAME)
+        self.actions.unregister_owner(f"{PLUGIN_NAME}.commands")
         if self.experimental_bridge:
             interaction_bridge.detach(PLUGIN_NAME)
 
@@ -106,8 +110,52 @@ class QQOfficialHubPlugin(Star):
             logger.exception("[QQHub] Failed to send whiteboard")
             yield event.plain_result(f"测试卡发送失败：{type(exc).__name__}: {exc}")
 
+    @staticmethod
+    def _command_action_id(command: str) -> str:
+        digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
+        return f"command.{digest}"
+
+    def _sync_command_actions(self) -> None:
+        owner = f"{PLUGIN_NAME}.commands"
+        self.actions.unregister_owner(owner)
+        for item in build_command_catalog(self.context):
+            command = str(item["command"])
+
+            async def callback(
+                context: ActionContext,
+                params: dict[str, Any],
+                command_text: str = command,
+            ) -> int:
+                arguments = str(params.get("arguments", "") or "").strip()
+                if len(arguments) > 100:
+                    return 1
+                full_command = command_text + (f" {arguments}" if arguments else "")
+                dispatch_registered_command(
+                    context.client,
+                    context.interaction,
+                    full_command,
+                )
+                return 0
+
+            self.actions.register(ActionSpec(
+                action_id=self._command_action_id(command),
+                title=f"直接执行 {command}",
+                description=(
+                    f"通过 AstrBot 正常命令流水线执行；参数放在 arguments。"
+                    f" {item.get('description', '')}"
+                ).strip(),
+                owner=owner,
+                default_permission=(
+                    "astrbot_admin"
+                    if item.get("permission") == "admin"
+                    else "everyone"
+                ),
+                callback=callback,
+            ))
+
     def get_action_catalog(self) -> list[dict[str, str]]:
         """Only registered, implemented callbacks may be selected by the UI."""
+        self._sync_command_actions()
         return self.actions.catalog()
 
     def validate_registered_actions(self, panel: object) -> None:
@@ -277,6 +325,7 @@ class QQOfficialHubPlugin(Star):
             "[QQHub] Callback action=%s group=%s member=%s",
             action_id, group_openid, member[-8:],
         )
+        self._sync_command_actions()
         context = ActionContext(
             client=client,
             interaction=interaction,

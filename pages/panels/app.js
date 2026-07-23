@@ -158,7 +158,8 @@ async function load() {
   for (const item of Object.values(state.observed_groups)) { const option = document.createElement("option"); option.value = item.origin; option.textContent = item.origin; groups.append(option); }
   const actionPreset = $("action-preset");
   for (const item of state.action_catalog || []) {
-    const option = document.createElement("option"); option.value = item.id; option.textContent = item.title;
+    const option = document.createElement("option"); option.value = item.id;
+    option.textContent = `${item.owner?.endsWith(".commands") ? "指令｜" : "动作｜"}${item.title}`;
     actionPreset.append(option);
   }
   const preset = $("command-preset");
@@ -241,6 +242,7 @@ $("action-preset").addEventListener("change", () => {
   button.data = $("action-preset").value;
   const spec = (state.action_catalog || []).find((item) => item.id === button.data);
   if (spec?.default_permission && button.permission === "everyone") button.permission = spec.default_permission;
+  button.action_params = spec?.owner?.endsWith(".commands") ? { arguments: "" } : {};
   render();
 });
 $("action-params").addEventListener("change", () => {
