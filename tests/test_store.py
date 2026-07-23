@@ -28,3 +28,15 @@ def test_store_rejects_group_override_before_observation():
             with pytest.raises(ValueError, match="已观察"):
                 await store.save_panel("group", "头条flag:GroupMessage:group", panel)
     asyncio.run(scenario())
+
+
+def test_issued_panel_button_is_scoped_to_its_group():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as temp:
+            store = PanelStore(Path(temp))
+            origin = "头条flag:GroupMessage:group-a"
+            panel = (await store.bootstrap())["templates"]["default_panel"]
+            nonce = await store.issue_panel_card(origin, panel)
+            assert await store.get_issued_button(origin, nonce, "refresh") is not None
+            assert await store.get_issued_button("头条flag:GroupMessage:group-b", nonce, "refresh") is None
+    asyncio.run(scenario())

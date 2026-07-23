@@ -18,11 +18,25 @@ ACTION_TYPES = {0, 1, 2}
 
 
 def empty_panel() -> dict[str, Any]:
+    """A visible, safe default that doubles as the first QQ capability probe."""
     return {
         "id": PANEL_ID,
-        "name": "头条卡片",
-        "markdown": "## 快捷操作\n请选择一个操作。",
-        "rows": [],
+        "name": "QQ Official Hub 白板测试卡",
+        "markdown": "# QQ Official Hub 白板测试卡\n每个按钮演示一种 QQ 官方能力；后台按钮 15 分钟后失效。",
+        "rows": [
+            [
+                {"id": "blue_everyone", "label": "蓝色：所有人可点", "visited_label": "蓝色：所有人可点", "style": 1, "action_type": 1, "data": "hub.test", "permission": "everyone", "specified_users": []},
+                {"id": "gray_everyone", "label": "灰色：所有人可点", "visited_label": "灰色：所有人可点", "style": 0, "action_type": 1, "data": "hub.test", "permission": "everyone", "specified_users": []},
+            ],
+            [
+                {"id": "refresh", "label": "刷新测试卡", "visited_label": "刷新测试卡", "style": 1, "action_type": 1, "data": "hub.refresh", "permission": "everyone", "specified_users": []},
+                {"id": "manager", "label": "仅群管理可点", "visited_label": "仅群管理可点", "style": 0, "action_type": 1, "data": "hub.test", "permission": "group_manager", "specified_users": []},
+            ],
+            [
+                {"id": "insert", "label": "放入输入框，不发送", "visited_label": "放入输入框，不发送", "style": 0, "action_type": 2, "data": "/头条卡片", "permission": "everyone", "specified_users": []},
+                {"id": "docs", "label": "打开 QQ 按钮文档", "visited_label": "打开 QQ 按钮文档", "style": 1, "action_type": 0, "data": "https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/trans/msg-btn.html", "permission": "everyone", "specified_users": []},
+            ],
+        ],
         "revision": 1,
     }
 
@@ -59,6 +73,10 @@ class PanelStore:
         value.setdefault("group_overrides", {})
         value.setdefault("observed_groups", {})
         value.setdefault("issued_test_cards", {})
+        default = value["templates"].get(PANEL_ID)
+        if isinstance(default, dict) and default.get("name") == "头条卡片" and not default.get("rows"):
+            value["templates"][PANEL_ID] = empty_panel()
+            self._write_atomic(value)
         return value
 
     def _write_atomic(self, value: dict[str, Any]) -> None:
@@ -108,6 +126,39 @@ class PanelStore:
             self._write_atomic(self._data)
             return copy.deepcopy(normalized)
 
+
+    async def issue_panel_card(self, origin: str, panel: dict[str, Any]) -> str:
+        """Persist an opaque, group-scoped snapshot before sending a callback card."""
+        import secrets
+        import time
+        if not self._valid_group_origin(origin):
+            raise ValueError("卡片只能发送到 QQ Official 群")
+        async with self._lock:
+            nonce = secrets.token_urlsafe(18)
+            now = int(time.time())
+            cards = self._data["issued_test_cards"]
+            for key, item in list(cards.items()):
+                if not isinstance(item, dict) or int(item.get("expires_at", 0)) <= now:
+                    cards.pop(key, None)
+            cards[nonce] = {"origin": origin, "expires_at": now + 900, "panel": copy.deepcopy(panel)}
+            self._write_atomic(self._data)
+            return nonce
+
+    async def get_issued_button(self, origin: str, nonce: str, button_id: str) -> dict[str, Any] | None:
+        import time
+        async with self._lock:
+            item = self._data["issued_test_cards"].get(nonce)
+            if not isinstance(item, dict) or item.get("origin") != origin or int(item.get("expires_at", 0)) <= int(time.time()):
+                return None
+            panel = item.get("panel")
+            if not isinstance(panel, dict):
+                return None
+            for row in panel.get("rows", []):
+                if isinstance(row, list):
+                    for button in row:
+                        if isinstance(button, dict) and button.get("id") == button_id:
+                            return copy.deepcopy(button)
+            return None
 
     async def issue_test_card(self, origin: str) -> str:
         """Persist a short-lived opaque callback capability before sending."""

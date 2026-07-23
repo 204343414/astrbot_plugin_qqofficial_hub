@@ -60,7 +60,7 @@ class QQOfficialHubPlugin(Star):
             yield event.plain_result("测试卡尚未启用。请在 Hub 配置中开启「实验性 QQ Interaction 测试桥」，然后完整重启 AstrBot。")
             return
         try:
-            await self._send_whiteboard(origin)
+            await self._send_configured_panel(origin)
         except Exception as exc:
             logger.exception("[QQHub] Failed to send whiteboard")
             yield event.plain_result(f"测试卡发送失败：{type(exc).__name__}: {exc}")
@@ -76,13 +76,28 @@ class QQOfficialHubPlugin(Star):
         return client
 
     @staticmethod
-    def _button(button_id: str, label: str, style: int, action_type: int, data: str, permission: int) -> dict[str, Any]:
+    def _permission_payload(button: dict[str, Any]) -> dict[str, Any]:
+        policy = str(button.get("permission", ""))
+        if policy == "specified_users":
+            return {"type": 0, "specify_user_ids": list(button.get("specified_users", []))}
+        if policy == "group_manager":
+            return {"type": 1}
+        # AstrBot-admin/operator are verified by Hub after a callback. QQ has
+        # no equivalent policy field, so it must allow the click through.
+        return {"type": 2}
+
+    @classmethod
+    def _button(cls, button: dict[str, Any], nonce: str) -> dict[str, Any]:
+        action_type = int(button["action_type"])
+        data = str(button["data"])
+        if action_type == 1:
+            data = f"qqhub:v2:{nonce}:{button['id']}"
         return {
-            "id": button_id,
-            "render_data": {"label": label, "visited_label": label, "style": style},
+            "id": str(button["id"]),
+            "render_data": {"label": button["label"], "visited_label": button["visited_label"], "style": int(button["style"])},
             "action": {
                 "type": action_type,
-                "permission": {"type": permission},
+                "permission": cls._permission_payload(button),
                 "data": data,
                 "reply": False,
                 "enter": False,
@@ -90,62 +105,50 @@ class QQOfficialHubPlugin(Star):
             },
         }
 
-    async def _send_whiteboard(self, origin: str, client=None) -> None:
+    async def _send_configured_panel(self, origin: str, client=None) -> None:
         client = client or self._get_qq_client(origin)
-        nonce = await self.store.issue_test_card(origin)
-        action = lambda name: f"qqhub:v1:{nonce}:{name}"
-        markdown = {
-            "content": (
-                "# QQ Official Hub 白板测试卡\n"
-                "第一行测试颜色和普通成员后台回调；第二行测试刷新与群管理限制；"
-                "第三行测试输入框指令与 URL。测试卡 15 分钟后失效。"
-            )
-        }
-        keyboard = {"content": {"rows": [
-            {"buttons": [
-                self._button("blue_everyone", "蓝色：所有人可点", 1, 1, action("blue"), 2),
-                self._button("gray_everyone", "灰色：所有人可点", 0, 1, action("gray"), 2),
-            ]},
-            {"buttons": [
-                self._button("refresh", "刷新测试卡", 1, 1, action("refresh"), 2),
-                self._button("manager", "仅群管理可点", 0, 1, action("manager"), 1),
-            ]},
-            {"buttons": [
-                self._button("insert", "放入输入框，不发送", 0, 2, "/头条卡片", 2),
-                self._button("docs", "打开 QQ 按钮文档", 1, 0, "https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/trans/msg-btn.html", 2),
-            ]},
-        ]}}
+        snapshot = await self.store.bootstrap()
+        panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
+        nonce = await self.store.issue_panel_card(origin, panel)
+        rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
         await client.api.post_group_message(
             group_openid=origin.split(":", 2)[-1],
             msg_type=2,
-            markdown=markdown,
-            keyboard=keyboard,
+            markdown={"content": panel["markdown"]},
+            keyboard={"content": {"rows": rows}},
             msg_seq=random.randint(1, 10000),
         )
-        logger.info("[QQHub] Whiteboard test card sent to %s", origin)
+        logger.info("[QQHub] Configured panel sent to %s revision=%s", origin, panel.get("revision"))
 
     async def _handle_interaction(self, client: Any, interaction: Any) -> int:
         resolved = getattr(getattr(interaction, "data", None), "resolved", None)
         data = str(getattr(resolved, "button_data", "") or "")
-        if not data.startswith("qqhub:v1:"):
-            return 1
         parts = data.split(":", 3)
-        if len(parts) != 4:
+        if len(parts) != 4 or parts[0] != "qqhub" or parts[1] != "v2":
             return 1
-        _, _, nonce, action = parts
+        _, _, nonce, button_id = parts
         group_openid = str(getattr(interaction, "group_openid", "") or "")
         if not group_openid:
             return 1
         origin = f"{client.platform.meta().id}:GroupMessage:{group_openid}"
-        if not await self.store.claim_test_action(origin, nonce):
-            logger.warning("[QQHub] Rejected stale or cross-group test action: %s", action)
+        button = await self.store.get_issued_button(origin, nonce, button_id)
+        if button is None:
+            logger.warning("[QQHub] Rejected stale/cross-group callback button=%s", button_id)
             return 3
         member = str(getattr(interaction, "group_member_openid", "") or "")
-        logger.info("[QQHub] Whiteboard callback action=%s group=%s member=%s", action, group_openid, member[-8:])
-        if action == "refresh":
-            task = asyncio.create_task(self._send_whiteboard(origin, client=client))
+        policy = button["permission"]
+        if policy == "specified_users" and member not in button["specified_users"]:
+            return 4
+        # QQ manager permission is platform-enforced. AstrBot-admin/operator
+        # are deliberately denied until their authoritative ID source is wired.
+        if policy in {"astrbot_admin", "operator"}:
+            return 4
+        action = str(button["data"])
+        logger.info("[QQHub] Callback action=%s group=%s member=%s", action, group_openid, member[-8:])
+        if action == "hub.refresh":
+            task = asyncio.create_task(self._send_configured_panel(origin, client=client))
             task.add_done_callback(self._log_refresh_failure)
-        elif action not in {"blue", "gray", "manager"}:
+        elif action != "hub.test":
             return 1
         return 0
 
