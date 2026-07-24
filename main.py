@@ -102,6 +102,10 @@ class QQOfficialHubPlugin(Star):
         platform = self.context.get_platform_inst(platform_id)
         if platform is None or platform.meta().name != "qq_official":
             return
+        # Slash commands belong to AstrBot/plugin routing even when their
+        # handler does not call stop_event(). Never append the LLM-off hint.
+        if str(event.get_message_str() or "").lstrip().startswith("/"):
+            return
         config = self.context.get_config(umo=origin)
         globally_enabled = bool(
             config.get("provider_settings", {}).get("enable", True)
@@ -169,9 +173,12 @@ class QQOfficialHubPlugin(Star):
         payload: dict[str, Any] = {
             "group_openid": origin.split(":", 2)[-1],
             "msg_type": 0,
+            # The documented latest qqbot-at-user form is currently escaped
+            # literally by the real group text endpoint/client. Probe QQ's
+            # deprecated-but-still-documented native text-chain form instead.
             "content": (
-                f'<qqbot-at-user id="{member_openid}" /> '
-                f'{"被动回复" if reply else "主动消息"}艾特测试成功'
+                f'<@{member_openid}> '
+                f'{"被动回复" if reply else "主动消息"}旧协议艾特测试成功'
             ),
             "msg_seq": random.randint(1, 10000),
         }
