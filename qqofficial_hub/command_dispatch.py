@@ -37,17 +37,12 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         self.bot = client
         self._adapter = adapter
         self._mention_openid = mention_openid
+        self.set_extra("qqhub_synthetic_command", True)
 
     async def send(self, message: MessageChain) -> None:
-        if self._mention_openid:
-            message = MessageChain(
-                chain=[
-                    Plain(f'<qqbot-at-user id="{self._mention_openid}" />\n'),
-                    *message.chain,
-                ],
-                use_t2i_=message.use_t2i_,
-                type=message.type,
-            )
+        # Neither documented qqbot-at-user nor legacy <@openid> is parsed by
+        # the currently deployed QQ group text path; do not leak raw tags into
+        # production command output while a native mention path is unresolved.
         await super().send(message)
         await self._adapter.send_by_session(self.session, message)
 

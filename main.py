@@ -103,8 +103,17 @@ class QQOfficialHubPlugin(Star):
         if platform is None or platform.meta().name != "qq_official":
             return
         # Slash commands belong to AstrBot/plugin routing even when their
-        # handler does not call stop_event(). Never append the LLM-off hint.
-        if str(event.get_message_str() or "").lstrip().startswith("/"):
+        # handler does not call stop_event(). WakingCheck may already have
+        # removed the wake prefix from event.message_str, so inspect the
+        # immutable AstrBotMessage copy as well. Synthetic Type 1 commands are
+        # explicitly marked because their raw Interaction has no text content.
+        if event.get_extra("qqhub_synthetic_command", False):
+            return
+        original_text = str(
+            getattr(getattr(event, "message_obj", None), "message_str", "") or ""
+        )
+        current_text = str(event.get_message_str() or "")
+        if original_text.lstrip().startswith("/") or current_text.lstrip().startswith("/"):
             return
         config = self.context.get_config(umo=origin)
         globally_enabled = bool(
@@ -334,10 +343,9 @@ class QQOfficialHubPlugin(Star):
         nonce = await self.store.issue_panel_card(origin, panel, reply_msg_id=msg_id)
         rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
         markdown_content = str(panel["markdown"])
-        if mention_openid and panel.get("mention_clicker"):
-            markdown_content = (
-                f'<qqbot-at-user id="{mention_openid}" />\n{markdown_content}'
-            )
+        # Real-device tests show both documented and legacy At tags are exposed
+        # literally on this QQ group path. Keep the setting/card metadata for a
+        # future native implementation, but never contaminate visible output.
         payload = {
             "group_openid": origin.split(":", 2)[-1],
             "msg_type": 2,
