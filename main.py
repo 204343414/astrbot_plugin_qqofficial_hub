@@ -5,11 +5,13 @@ import asyncio
 import hashlib
 import random
 import re
+from sys import maxsize
 from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
+from astrbot.core.star.session_llm_manager import SessionServiceManager
 
 from .qqofficial_hub import interaction_bridge
 from .qqofficial_hub.action_registry import (
@@ -87,6 +89,30 @@ class QQOfficialHubPlugin(Star):
         platform = self.context.get_platform_inst(platform_id)
         if platform is not None and platform.meta().name == "qq_official":
             await self.store.observe_group(origin, platform_id)
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=-maxsize)
+    async def show_panel_hint_when_llm_disabled(self, event: AstrMessageEvent):
+        """Last-resort hint for an otherwise unhandled QQ Official wake-up."""
+        if not event.is_at_or_wake_command:
+            return
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        if "GroupMessage" not in origin:
+            return
+        platform_id = origin.split(":", 1)[0]
+        platform = self.context.get_platform_inst(platform_id)
+        if platform is None or platform.meta().name != "qq_official":
+            return
+        config = self.context.get_config(umo=origin)
+        globally_enabled = bool(
+            config.get("provider_settings", {}).get("enable", True)
+        )
+        session_enabled = await SessionServiceManager.is_llm_enabled_for_session(
+            origin
+        )
+        if globally_enabled and session_enabled:
+            return
+        event.stop_event()
+        yield event.plain_result("请@我输入 /qqhub 面板 查看功能")
 
     @filter.command_group("qqhub")
     def qqhub(self):
