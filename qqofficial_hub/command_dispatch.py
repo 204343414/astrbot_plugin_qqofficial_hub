@@ -40,9 +40,24 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         self.set_extra("qqhub_synthetic_command", True)
 
     async def send(self, message: MessageChain) -> None:
-        # Neither documented qqbot-at-user nor legacy <@openid> is parsed by
-        # the currently deployed QQ group text path; do not leak raw tags into
-        # production command output while a native mention path is unresolved.
+        # Do not try to prepend <qqbot-at-user .../> here. Field testing on
+        # QQ Official group messages shows:
+        #
+        # 1. type=2 command buttons are client-side command input. Whether the
+        #    incoming command event is displayed as [At:qq_official] or
+        #    [At:<real bot id>] depends on QQ/AstrBot receive mode: when the
+        #    bot only receives @ messages, QQ tends to synthesize the @ context;
+        #    when the bot receives all group messages, the full mention object
+        #    may be absent/different. This is not a reliable clicker identity.
+        # 2. type=1 callback buttons do provide group_member_openid in the
+        #    Interaction event, but require the group owner to enable proactive
+        #    message push. Current QQ group active-message paths do not reliably
+        #    render either documented <qqbot-at-user id="..." /> or legacy
+        #    <@openid> as a real @; they may be shown literally.
+        #
+        # Therefore attribution for type=1 should be kept in server-side audit
+        # data (ActionContext.member_openid / logs) unless a later QQ official
+        # capability provides a verified native @ path for group active replies.
         await super().send(message)
         await self._adapter.send_by_session(self.session, message)
 
