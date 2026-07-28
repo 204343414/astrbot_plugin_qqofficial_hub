@@ -11,6 +11,12 @@
     "type": "bool",
     "default": false
   },
+  "empty_mention_opens_panel": {
+    "description": "空 @ 默认发送 Hub 面板",
+    "hint": "开启后，在 QQ 官方群里只 @ 机器人且不输入其他内容时，直接发送当前群配置的 Hub 面板；关闭后保留文字提示“请@我输入 /qqhub 查看功能”。斜杠指令不受影响。",
+    "type": "bool",
+    "default": true
+  },
   "operator_openids": {
     "description": "Hub 操作员 OpenID",
     "hint": "用于 permission=operator 的按钮后端校验；多个用逗号、空格或换行分隔。",

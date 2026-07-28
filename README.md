@@ -17,7 +17,7 @@ QQ 官方机器人 Markdown＋Keyboard 可视化编辑器与 Interaction 安全�
 - 进程级 Action Registry；业务插件可按 owner 注册 type=1 直接执行动作，ID 冲突会拒绝；
 - AstrBot 已注册命令会自动生成 `command.<hash>` Action；点击后以点击者 OpenID/当前群构造内部消息并重新进入正常 CommandFilter/Permission/TempBan 流水线，群里不显示用户指令；
 - type=1 按钮支持服务端 JSON 参数（≤2048字节），命令 Action 使用 `{"arguments":"..."}`；参数不直接暴露在 QQ button_data；
-- `/qqhub 面板` 发送当前群面板；
+- `/qqhub` 发送当前群面板（`/qqhub 面板` 仍兼容）；
 - 可选 Interaction 兼容桥：单 owner、稳定 generation、interaction_id 去重、4秒回调超时、ACK。
 
 ## QQ 已知边界
@@ -52,7 +52,10 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 ## 命令
 
 ```text
+/qqhub
 /qqhub 面板
 ```
 
-成功时只发送一张面板；失败时只回复一条错误。
+`/qqhub` 直接发送当前群面板；`/qqhub 面板` 保留为兼容入口。成功时只发送一张面板；失败时只回复一条错误。
+
+配置 `empty_mention_opens_panel=true` 时，在 QQ 官方群里只 @ 机器人且不输入其他内容，会直接发送当前群面板；关闭后会提示“请@我输入 /qqhub 查看功能”。
