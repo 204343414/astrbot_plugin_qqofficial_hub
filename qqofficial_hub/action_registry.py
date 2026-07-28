@@ -49,6 +49,14 @@ class ActionRegistry:
                 del self._actions[action_id]
 
     def catalog(self) -> list[dict[str, str]]:
+        def sort_key(spec: ActionSpec) -> tuple[int, str, str]:
+            # Command actions use hashed action_id values, so sorting by id makes
+            # the "直接执行" dropdown look random.  Sort registered commands by
+            # their human-readable title/description instead; keep built-in Hub
+            # actions above command actions.
+            is_command = spec.owner.endswith(".commands")
+            return (1 if is_command else 0, spec.title, spec.description)
+
         return [
             {
                 "id": spec.action_id,
@@ -57,7 +65,7 @@ class ActionRegistry:
                 "owner": spec.owner,
                 "default_permission": spec.default_permission,
             }
-            for spec in sorted(self._actions.values(), key=lambda item: (item.owner, item.action_id))
+            for spec in sorted(self._actions.values(), key=sort_key)
         ]
 
     def contains(self, action_id: str) -> bool:

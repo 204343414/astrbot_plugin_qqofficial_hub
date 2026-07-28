@@ -26,7 +26,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.2.1", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.2.2", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -96,9 +96,7 @@ class QQOfficialHubPlugin(Star):
         if not event.is_at_or_wake_command:
             return
         origin = str(getattr(event, "unified_msg_origin", "") or "")
-        if "GroupMessage" not in origin:
-            return
-        platform_id = origin.split(":", 1)[0]
+        platform_id = origin.split(":", 1)[0] if origin else str(event.get_platform_id() or "")
         platform = self.context.get_platform_inst(platform_id)
         if platform is None or platform.meta().name != "qq_official":
             return
@@ -115,11 +113,6 @@ class QQOfficialHubPlugin(Star):
         current_text = str(event.get_message_str() or "")
         if original_text.lstrip().startswith("/") or current_text.lstrip().startswith("/"):
             return
-        if not original_text.strip() and not current_text.strip() and self.empty_mention_opens_panel:
-            event.stop_event()
-            async for result in self._send_panel_from_event(event, command_name="@bot"):
-                yield result
-            return
 
         config = self.context.get_config(umo=origin)
         globally_enabled = bool(
@@ -130,7 +123,20 @@ class QQOfficialHubPlugin(Star):
         )
         if globally_enabled and session_enabled:
             return
+
         event.stop_event()
+        if "GroupMessage" not in origin:
+            # Do not send Hub cards in C2C/private chat yet. Private QQ users
+            # cannot @ the bot like a group mention; when normal LLM is disabled,
+            # give one short routing hint instead of opening a half-supported
+            # private panel.
+            yield event.plain_result("请在群聊中 @我 输入 /qqhub 查看功能。")
+            return
+
+        if not original_text.strip() and not current_text.strip() and self.empty_mention_opens_panel:
+            async for result in self._send_panel_from_event(event, command_name="@bot"):
+                yield result
+            return
         if self.empty_mention_opens_panel:
             async for result in self._send_panel_from_event(event, command_name="@bot"):
                 yield result

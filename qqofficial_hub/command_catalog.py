@@ -51,4 +51,7 @@ def build_command_catalog(context: Any) -> list[dict[str, Any]]:
                 "permission": permission,
                 "module": module_path,
             })
-    return sorted(commands.values(), key=lambda item: (item["module"], item["command"]))
+    # The editor dropdown is primarily searched by command name. Sorting by
+    # module groups commands by implementation file, but feels random when many
+    # commands share a prefix. Keep a stable command-first order.
+    return sorted(commands.values(), key=lambda item: (item["command"], item["module"]))
