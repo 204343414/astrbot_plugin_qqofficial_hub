@@ -10,7 +10,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 
-from .qqofficial_hub import ephemeral, identity, interaction_bridge
+from .qqofficial_hub import ephemeral, identity, interaction_bridge, named_cards
 from .qqofficial_hub.action_registry import (
     ActionContext,
     ActionSpec,
@@ -31,7 +31,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.12.1", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.13.0", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -113,6 +113,40 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
                 )
             except Exception as exc:
                 logger.debug("[QQHub] Cannot record identity: %s", exc)
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=90)
+    async def open_named_card_by_command(self, event: AstrMessageEvent):
+        """Open a named card whose bound trigger matches this message.
+
+        Runs before the LLM-disabled hint so a bound card wins over the generic
+        fallback, but after real command handlers so it can never shadow them.
+        """
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        if "GroupMessage" not in origin:
+            return
+        text = str(event.get_message_str() or "").strip()
+        if not text.startswith("/"):
+            return
+        card = await self.store.find_card_by_command(text[1:].split()[0] if text[1:].split() else "")
+        if card is None:
+            return
+        event.stop_event()
+        try:
+            await self._send_configured_panel(
+                origin,
+                panel=card["panel"],
+                msg_id=str(event.message_obj.message_id or "") or None,
+                clicker_header=await self._clicker_header(
+                    origin, str(event.get_sender_id() or "")
+                ),
+            )
+        except Exception as exc:
+            logger.exception("[QQHub] Failed to open named card")
+            yield event.plain_result(f"打开卡片失败：{type(exc).__name__}: {exc}")
 
     @filter.platform_adapter_type(
         filter.PlatformAdapterType.QQOFFICIAL
@@ -403,10 +437,12 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         event_id: str | None = None,
         mention_openid: str = "",
         clicker_header: str = "",
+        panel: dict[str, Any] | None = None,
     ) -> None:
         client = client or self._get_qq_client(origin)
-        snapshot = await self.store.bootstrap()
-        panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
+        if panel is None:
+            snapshot = await self.store.bootstrap()
+            panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
         nonce = await self.store.issue_panel_card(origin, panel, reply_msg_id=msg_id)
         rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
         markdown_content = self._prepend_header(

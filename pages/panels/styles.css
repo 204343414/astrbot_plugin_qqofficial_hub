@@ -32,3 +32,6 @@
 .diag-tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; }
 .diag-tag.ext { background: rgba(56,189,248,.18); color: #0284c7; border: 1px solid rgba(56,189,248,.4); }
 .diag-tag.own { background: rgba(148,163,184,.16); border: 1px solid rgba(148,163,184,.3); }
+
+.card-tools { display: flex; gap: 8px; margin: 6px 0 4px; }
+.card-tools button { flex: 1; font-size: 12px; padding: 6px 8px; }

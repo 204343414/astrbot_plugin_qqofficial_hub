@@ -284,6 +284,63 @@ class PanelStore:
             )[: len(table) - 2000]:
                 table.pop(key, None)
 
+    async def list_cards(self) -> list[dict[str, Any]]:
+        """All named cards, ordered for a stable editor list."""
+        async with self._lock:
+            cards = self._data.setdefault("named_cards", {})
+            return [copy.deepcopy(v) for _, v in sorted(cards.items())]
+
+    async def get_card(self, card_id: str) -> dict[str, Any] | None:
+        async with self._lock:
+            item = self._data.setdefault("named_cards", {}).get(str(card_id))
+            return copy.deepcopy(item) if isinstance(item, dict) else None
+
+    async def save_card(self, card_id: str, panel: object, command: str = "") -> dict[str, Any]:
+        """Create or update a named card. ``command`` may be empty."""
+        from . import named_cards
+        card_id = named_cards.validate_card_id(card_id)
+        validated = validate_panel(panel)
+        command = named_cards.validate_command(command)
+        async with self._lock:
+            cards = self._data.setdefault("named_cards", {})
+            if len(cards) >= named_cards.MAX_CARDS and card_id not in cards:
+                raise ValueError(f"最多只能创建 {named_cards.MAX_CARDS} 张卡片")
+            clash = next(
+                (other for other, item in cards.items()
+                 if other != card_id and command
+                 and str(item.get("command") or "") == command),
+                None,
+            )
+            if clash:
+                raise ValueError(f"指令 {command} 已被卡片「{clash}」占用")
+            prior = cards.get(card_id) if isinstance(cards.get(card_id), dict) else {}
+            validated["revision"] = int(prior.get("panel", {}).get("revision", 0)) + 1
+            cards[card_id] = {
+                "id": card_id,
+                "command": command,
+                "panel": validated,
+            }
+            self._write_atomic(self._data)
+            return copy.deepcopy(cards[card_id])
+
+    async def delete_card(self, card_id: str) -> bool:
+        async with self._lock:
+            cards = self._data.setdefault("named_cards", {})
+            existed = cards.pop(str(card_id), None) is not None
+            if existed:
+                self._write_atomic(self._data)
+            return existed
+
+    async def find_card_by_command(self, command: str) -> dict[str, Any] | None:
+        command = str(command or "").strip().lstrip("/")
+        if not command:
+            return None
+        async with self._lock:
+            for item in self._data.setdefault("named_cards", {}).values():
+                if isinstance(item, dict) and str(item.get("command") or "") == command:
+                    return copy.deepcopy(item)
+            return None
+
     async def remember_identity(self, key: str, name: str, ttl_seconds: int) -> bool:
         """Store the latest nickname for an OpenID. True when it changed."""
         import time

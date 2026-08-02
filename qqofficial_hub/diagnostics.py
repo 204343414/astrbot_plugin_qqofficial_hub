@@ -41,6 +41,7 @@ HUB_MODULES = (
     "interaction_bridge",
     "issued_cards",
     "keyboard",
+    "named_cards",
     "panel_convert",
     "passive_reply",
     "snippets",
@@ -107,7 +108,9 @@ def action_report(plugin: Any) -> dict[str, Any]:
         {
             "owner": owner,
             "external": not owner.startswith(hub_owner_prefix),
-            "actions": sorted(items, key=lambda x: x["id"]),
+            # Command actions carry hashed ids, so ordering by id looks random.
+            # Sort by the human-readable title, falling back to the id.
+            "actions": sorted(items, key=lambda x: (x["title"] or x["id"], x["id"])),
         }
         for owner, items in sorted(owners.items())
     ]

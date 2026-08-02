@@ -4,13 +4,25 @@ let state = null;
 let selected = null;
 let dragging = null;
 
+// "" means the built-in hub panel; any other value is a named card id.
+let currentCardId = "";
+
+function namedCard(id) {
+  return (state.named_cards || []).find((item) => item.id === id) || null;
+}
+
 function currentPanel() {
+  if (currentCardId) {
+    const card = namedCard(currentCardId);
+    if (card) return card.panel;
+  }
   const origin = $("group").value;
   if ($("scope").value === "group" && origin && state.group_overrides[origin]) return state.group_overrides[origin];
   return state.templates.default_panel;
 }
 function clonePanel(panel) { return JSON.parse(JSON.stringify(panel)); }
 function editablePanel() {
+  if (currentCardId) return currentPanel();
   const origin = $("group").value;
   if ($("scope").value === "group" && origin && !state.group_overrides[origin]) {
     state.group_overrides[origin] = clonePanel(state.templates.default_panel);
@@ -256,11 +268,24 @@ async function load() {
     preset.append(option);
   }
   renderSnippetLibrary();
+  renderCardList();
   $("group-wrap").hidden = !groups.options.length; if (!groups.options.length) $("scope").value = "global"; render();
 }
 async function save() {
   try {
-    const scope = $("scope").value, origin = $("group").value, panel = editablePanel();
+    const panel = editablePanel();
+    if (currentCardId) {
+      const result = await bridge.apiPost("cards", {
+        id: currentCardId, panel, command: $("card-command").value.trim(),
+      });
+      state.named_cards = (state.named_cards || [])
+        .map((c) => (c.id === result.card.id ? result.card : c));
+      renderCardList();
+      setNotice(`卡片 ${result.card.id} 已保存。`);
+      render();
+      return;
+    }
+    const scope = $("scope").value, origin = $("group").value;
     const result = await bridge.apiPost("panel", { scope, origin, panel });
     if (scope === "global") state.templates.default_panel = result.panel; else state.group_overrides[origin] = result.panel;
     setNotice("已原子保存；版本已更新，旧回调卡自动失效。"); render();
@@ -484,4 +509,69 @@ $("diag-close").onclick = () => { $("diag-modal").hidden = true; };
 $("diag-refresh").onclick = loadDiagnostics;
 $("diag-modal").addEventListener("click", (event) => {
   if (event.target === $("diag-modal")) $("diag-modal").hidden = true;
+});
+
+
+// --- 多卡片管理 -------------------------------------------------------------
+function renderCardList() {
+  const select = $("card-select");
+  select.innerHTML = "";
+  const hub = document.createElement("option");
+  hub.value = ""; hub.textContent = "Hub 主面板（默认）";
+  select.append(hub);
+  for (const card of state.named_cards || []) {
+    const option = document.createElement("option");
+    option.value = card.id;
+    option.textContent = card.command ? `${card.id}  (/${card.command})` : card.id;
+    select.append(option);
+  }
+  select.value = currentCardId;
+  const named = Boolean(currentCardId);
+  $("card-delete").disabled = !named;
+  $("card-command-wrap").hidden = !named;
+  $("scope").disabled = named;          // named cards are global by design
+  if (named) {
+    const card = namedCard(currentCardId);
+    $("card-command").value = card ? card.command || "" : "";
+  }
+}
+
+$("card-select").addEventListener("change", () => {
+  currentCardId = $("card-select").value;
+  selected = null;
+  renderCardList();
+  render();
+});
+
+$("card-new").onclick = async () => {
+  const id = (prompt("新卡片编号（字母/数字/下划线/短横线）：") || "").trim();
+  if (!id) return;
+  if (namedCard(id)) { setNotice(`卡片 ${id} 已存在`, true); return; }
+  const template = clonePanel(state.templates.default_panel);
+  template.name = id;
+  try {
+    const result = await bridge.apiPost("cards", { id, panel: template, command: "" });
+    state.named_cards = [...(state.named_cards || []), result.card]
+      .sort((a, b) => a.id.localeCompare(b.id));
+    currentCardId = result.card.id;
+    renderCardList(); render();
+    setNotice(`已新建卡片 ${result.card.id}`);
+  } catch (error) { setNotice(error.message || "新建失败", true); }
+};
+
+$("card-delete").onclick = async () => {
+  if (!currentCardId) return;
+  if (!confirm(`删除卡片 ${currentCardId}？`)) return;
+  try {
+    await bridge.apiPost("cards/delete", { id: currentCardId });
+    state.named_cards = (state.named_cards || []).filter((c) => c.id !== currentCardId);
+    currentCardId = "";
+    renderCardList(); render();
+    setNotice("已删除");
+  } catch (error) { setNotice(error.message || "删除失败", true); }
+};
+
+$("card-command").addEventListener("input", () => {
+  const card = namedCard(currentCardId);
+  if (card) card.command = $("card-command").value.trim();
 });
