@@ -23,7 +23,7 @@ from .qqofficial_hub.command_dispatch import (
     dispatch_registered_command,
     passive_event_id,
 )
-from .qqofficial_hub.passive_reply import next_msg_seq
+from .qqofficial_hub.passive_reply import next_msg_seq, real_msg_id
 from .qqofficial_hub.panel_convert import panel_to_ephemeral
 from .qqofficial_hub.store import PanelStore
 from .web import HubWebController
@@ -31,7 +31,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.13.3", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.13.4", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -458,6 +458,7 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         if panel is None:
             snapshot = await self.store.bootstrap()
             panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
+        msg_id = real_msg_id(msg_id)
         nonce = await self.store.issue_panel_card(
             origin, panel, reply_msg_id=msg_id, card_id=card_id
         )

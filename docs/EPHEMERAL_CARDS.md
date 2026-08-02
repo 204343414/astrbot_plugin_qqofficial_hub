@@ -189,3 +189,18 @@ await hub.send_ephemeral_card(origin, card)   # 无发起者：若卡片要 init
 
 > 兼容性：只写 `owner_openid` 不写 `owner_mode` 的老卡片，自动视为 `specified`。
 > `owner_mode="everyone"` 时残留的 `owner_openid` 会被清空，避免"看起来没锁其实锁着"。
+
+
+## msg_id 的陷阱
+
+由 type=1 按钮触发的命令走的是**合成事件**，其 `message_obj.message_id` 是
+Hub 伪造的 `hub-interaction:<uuid>`——AstrBot 需要它做键，但 QQ 不认识。
+直接转发给 QQ 会得到：
+
+```
+ServerError: 请求参数msg_id无效或越权
+```
+
+`send_ephemeral_card()` 会自动用 `real_msg_id()` 过滤掉这类伪造 id，
+所以调用方可以放心地把 `event.message_obj.message_id` 传进来。
+优先传 `event_id`（来自 `INTERACTION_CREATE`）仍然是最稳的做法。

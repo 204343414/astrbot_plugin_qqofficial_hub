@@ -11,7 +11,7 @@ from astrbot.api import logger
 
 from .action_registry import ActionContext, EphemeralContext
 from . import ephemeral
-from .passive_reply import next_msg_seq, passive_event_id
+from .passive_reply import next_msg_seq, passive_event_id, real_msg_id
 
 
 class EphemeralCardMixin:
@@ -159,6 +159,7 @@ class EphemeralCardMixin:
             }},
             "msg_seq": next_msg_seq(),
         }
+        msg_id = real_msg_id(msg_id)
         if msg_id:
             payload["msg_id"] = msg_id
         elif event_id:

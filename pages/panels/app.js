@@ -599,3 +599,34 @@ $("card-command").addEventListener("input", () => {
   const card = namedCard(currentCardId);
   if (card) card.command = $("card-command").value.trim();
 });
+
+
+// Plugins may register their Actions *after* this page loaded, so the dropdown
+// would be missing them until a full refresh. Let the user re-pull on demand.
+$("reload-catalog").onclick = async () => {
+  const button = $("reload-catalog");
+  button.disabled = true;
+  try {
+    const fresh = await bridge.apiGet("bootstrap");
+    state.action_catalog = fresh.action_catalog || [];
+    state.command_catalog = fresh.command_catalog || [];
+    const preset = $("action-preset");
+    const keep = preset.value;
+    preset.innerHTML = "";
+    for (const item of state.action_catalog) {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = `${item.owner?.endsWith(".commands") ? "指令｜" : "动作｜"}${item.title}`;
+      preset.append(option);
+    }
+    preset.value = keep;
+    const external = state.action_catalog.filter(
+      (item) => item.owner && !item.owner.startsWith("astrbot_plugin_qqofficial_hub"),
+    ).length;
+    setNotice(`已刷新：共 ${state.action_catalog.length} 个动作，其中外部插件 ${external} 个。`);
+  } catch (error) {
+    setNotice(error.message || "刷新失败", true);
+  } finally {
+    button.disabled = false;
+  }
+};

@@ -222,3 +222,32 @@ def test_hub_panel_buttons_are_unaffected():
         nonce = await store.issue_panel_card(origin, panel)
         assert await store.get_issued_button_context(origin, nonce, button_id)
     asyncio.run(scenario())
+
+
+def test_synthetic_msg_id_is_never_sent_to_qq():
+    """HubSyntheticCommandEvent fabricates a message id for AstrBot's benefit.
+
+    Forwarding it to QQ produces "请求参数msg_id无效或越权", which surfaced as
+    a bare "发牌失败" for game plugins that simply passed the event's id along.
+    """
+    from qqofficial_hub.passive_reply import real_msg_id
+    assert real_msg_id("hub-interaction:abc-123") == ""
+    assert real_msg_id("") == ""
+    assert real_msg_id(None) == ""
+    assert real_msg_id("  ") == ""
+    real = "ROBOT1.0_abcDEF"
+    assert real_msg_id(real) == real
+
+
+def test_send_paths_filter_the_msg_id():
+    root = Path(__file__).parents[1]
+    for name in ("main.py", "qqofficial_hub/ephemeral_routes.py"):
+        source = root.joinpath(name).read_text(encoding="utf-8")
+        assert "real_msg_id(msg_id)" in source, f"{name} 未过滤合成 msg_id"
+
+
+def test_editor_can_refresh_the_action_catalog():
+    """Plugins register Actions after page load; a manual re-pull is needed."""
+    root = Path(__file__).parents[1] / "pages" / "panels"
+    assert 'id="reload-catalog"' in (root / "index.html").read_text("utf-8")
+    assert "reload-catalog" in (root / "app.js").read_text("utf-8")

@@ -49,6 +49,24 @@ def next_msg_seq() -> int:
     return next(_msg_seq_counter)
 
 
+#: Prefix used by HubSyntheticCommandEvent for its fabricated message id.
+SYNTHETIC_MSG_ID_PREFIX = "hub-interaction:"
+
+
+def real_msg_id(value: object) -> str:
+    """Drop message ids QQ never issued.
+
+    A synthetic command event carries ``hub-interaction:<uuid>`` so AstrBot has
+    something to key on. Passing it to QQ yields
+    "请求参数msg_id无效或越权". Callers can hand us whatever they have and let
+    this decide.
+    """
+    text = str(value or "").strip()
+    if not text or text.startswith(SYNTHETIC_MSG_ID_PREFIX):
+        return ""
+    return text
+
+
 def passive_event_id(interaction: Any) -> str:
     """Return the id QQ accepts as ``event_id`` for a passive reply.
 
