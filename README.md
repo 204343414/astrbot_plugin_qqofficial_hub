@@ -17,7 +17,8 @@ QQ 官方机器人 Markdown＋Keyboard 可视化编辑器与 Interaction 安全�
 - 进程级 Action Registry；业务插件可按 owner 注册 type=1 直接执行动作，ID 冲突会拒绝；
 - AstrBot 已注册命令会自动生成 `command.<hash>` Action；点击后以点击者 OpenID/当前群构造内部消息并重新进入正常 CommandFilter/Permission/TempBan 流水线，群里不显示用户指令；
 - type=1 按钮支持服务端 JSON 参数（≤2048字节），命令 Action 使用 `{"arguments":"..."}`；参数不直接暴露在 QQ button_data；
-- type=1 回调回复走**被动消息**：以 `INTERACTION_CREATE` 事件 ID 作为 `event_id` 下发，因此**无需群主开启主动推送权限**，也不消耗每月 4 条主动配额；event_id 只用一次，失败或用尽自动回退主动推送路径；
+- 📖 **[QQ 官方接口与类型完整速查](docs/QQ_OFFICIAL_REFERENCE.md)** —— 动手前必读，含全部 interaction type、ACK code、额度限制与已知陷阱；
+- type=1 回调回复走**被动消息**：以 `INTERACTION_CREATE` 事件 ID 作为 `event_id` 下发，因此**无需群主开启主动推送权限**，也不消耗每月 4 条主动配额；每个事件最多用 5 次（官方上限），支持图片/语音/视频等富媒体（自动上传后以 msg_type=7 发送），失败或用尽自动回退主动推送路径；
 - `/qqhub` 发送当前群面板（`/qqhub 面板` 仍兼容）；
 - 可选 Interaction 兼容桥：单 owner、稳定 generation、interaction_id 去重、4秒回调超时、ACK。
 

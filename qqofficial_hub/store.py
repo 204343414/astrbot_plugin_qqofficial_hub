@@ -59,6 +59,7 @@ class PanelStore:
             "group_overrides": {},
             "observed_groups": {},
             "issued_test_cards": {},
+            "authorizations": {},
         }
 
     def _load(self) -> dict[str, Any]:
@@ -185,6 +186,41 @@ class PanelStore:
     ) -> dict[str, Any] | None:
         context = await self.get_issued_button_context(origin, nonce, button_id)
         return context[0] if context else None
+
+    async def record_authorization(
+        self,
+        *,
+        platform_id: str,
+        group_openid: str = "",
+        user_openid: str = "",
+        scope: str = "",
+        opt_scene: str = "",
+    ) -> None:
+        """Persist a type=18/19 authorize event.
+
+        ``scope`` is ``group_push``/``c2c_push`` per the docs, so this records
+        whether proactive push is actually granted for that target.
+        """
+        import time
+        target = group_openid or user_openid
+        if not target or not scope:
+            return
+        async with self._lock:
+            table = self._data.setdefault("authorizations", {})
+            table[f"{platform_id}:{target}"] = {
+                "platform_id": platform_id,
+                "group_openid": group_openid,
+                "user_openid": user_openid,
+                "scope": scope,
+                "opt_scene": opt_scene,
+                "updated_at": int(time.time()),
+            }
+            self._write_atomic(self._data)
+
+    async def get_authorization(self, platform_id: str, target: str) -> dict[str, Any] | None:
+        async with self._lock:
+            item = self._data.get("authorizations", {}).get(f"{platform_id}:{target}")
+            return copy.deepcopy(item) if isinstance(item, dict) else None
 
     def _valid_group_origin(self, origin: str) -> bool:
         parts = origin.split(":", 2)

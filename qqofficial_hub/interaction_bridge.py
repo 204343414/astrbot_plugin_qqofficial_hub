@@ -19,6 +19,18 @@ logger = logging.getLogger("astrbot")
 _STATE_KEY = "_ASTRBOT_QQHUB_EXPERIMENTAL_INTERACTION_BRIDGE"
 Callback = Callable[[Any, Any], Awaitable[int]]
 
+# Docs: only type=11 (message button) and type=12 (quick menu) must be answered
+# via PUT /interactions/{id}; other types need no ACK (calling it is harmless
+# but pointless). Authorize events (18/19) carry the proactive-push grant, so we
+# still want them delivered to the handler.
+ACK_TYPES = frozenset({11, 12})
+NO_ACK_TYPES = frozenset({18, 19})
+HANDLED_TYPES = ACK_TYPES | NO_ACK_TYPES
+
+# The handler now awaits the real send so the ACK reflects the true outcome;
+# uploads make 4s too tight.
+HANDLER_TIMEOUT_SECONDS = 12
+
 
 def _state() -> dict[str, Any]:
     state = getattr(builtins, _STATE_KEY, None)
@@ -96,13 +108,25 @@ async def _ack(client: Any, interaction_id: str, code: int) -> bool:
 async def _dispatch(client: Any, interaction: Any) -> None:
     interaction_id = str(getattr(interaction, "id", "") or "").strip()
     interaction_type = getattr(interaction, "type", None)
-    if not interaction_id or interaction_type not in {11, 12}:
+    if not interaction_id or interaction_type not in HANDLED_TYPES:
         return
     state = _state()
     lock = state.get("lock")
     if lock is None:
         lock = asyncio.Lock()
         state["lock"] = lock
+
+    needs_ack = interaction_type in ACK_TYPES
+    if not needs_ack:
+        # Authorize events are informational; deliver once, never ACK.
+        callback_ref = state.get("callback")
+        callback = callback_ref() if callback_ref else None
+        if callback is not None:
+            try:
+                await callback(client, interaction)
+            except Exception:
+                logger.exception("[QQHub] Authorize handler failed: %s", interaction_id)
+        return
 
     retry_code = None
     async with lock:
@@ -131,7 +155,7 @@ async def _dispatch(client: Any, interaction: Any) -> None:
         callback_ref = state.get("callback")
         callback = callback_ref() if callback_ref else None
         if callback is not None:
-            code = int(await asyncio.wait_for(callback(client, interaction), timeout=4))
+            code = int(await asyncio.wait_for(callback(client, interaction), timeout=HANDLER_TIMEOUT_SECONDS))
         if code not in {0, 1, 2, 3, 4, 5}:
             code = 1
     except TimeoutError:

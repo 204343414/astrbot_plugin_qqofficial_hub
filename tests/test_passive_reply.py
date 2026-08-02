@@ -125,13 +125,14 @@ def test_reply_uses_event_id_and_avoids_proactive_push():
     asyncio.run(scenario())
 
 
-def test_event_id_is_spent_only_once_then_falls_back():
+def test_event_id_reusable_up_to_documented_budget():
+    """Docs: a passive reply may be used at most 5 times per event."""
     async def scenario():
         event, sent, proactive = _build()
-        await event.send(MessageChain(chain=[Plain("first")]))
-        await event.send(MessageChain(chain=[Plain("second")]))
-        assert len(sent) == 1, "event_id must not be reused"
-        assert len(proactive) == 1, "second reply falls back to proactive path"
+        for i in range(7):
+            await event.send(MessageChain(chain=[Plain(f"m{i}")]))
+        assert len(sent) == 5, "must use the full 5-reply budget, no more"
+        assert len(proactive) == 2, "overflow falls back instead of vanishing"
     asyncio.run(scenario())
 
 
@@ -164,7 +165,7 @@ def test_empty_text_does_not_consume_event_id():
         await event.send(MessageChain(chain=[]))
         assert sent == []
         assert len(proactive) == 1
-        assert event._event_id_used is False
+        assert event._replies_used == 0
     asyncio.run(scenario())
 
 
@@ -181,3 +182,76 @@ def test_passive_event_id_reads_event_id_not_interaction_id():
     assert passive_event_id(SimpleNamespace(id="INTERACTION-9")) == ""
     assert passive_event_id(SimpleNamespace(id="X", event_id=None)) == ""
     assert passive_event_id(SimpleNamespace(id="X", event_id="  E  ")) == "E"
+
+
+def test_media_is_uploaded_not_silently_dropped():
+    """A chain with an Image must not lose the image."""
+    async def scenario():
+        from qqofficial_hub import passive_reply as pr
+
+        uploads, sends = [], []
+
+        async def fake_upload(client, ft, src, name, *, group_openid="", user_openid=""):
+            uploads.append((ft, src))
+            return {"file_info": "FI-1"}
+
+        async def post_group_message(**payload):
+            sends.append(payload)
+
+        original = pr._upload_media
+        pr._upload_media = fake_upload
+        try:
+            client = SimpleNamespace(
+                api=SimpleNamespace(post_group_message=post_group_message))
+            sent = await pr.send_passive(
+                client, event_id="E1", text="caption",
+                media=[(pr.IMAGE_FILE_TYPE, "/tmp/a.png", None)],
+                group_openid="G1",
+            )
+        finally:
+            pr._upload_media = original
+        assert uploads == [(pr.IMAGE_FILE_TYPE, "/tmp/a.png")]
+        assert sent == 1
+        assert sends[0]["msg_type"] == 7
+        assert sends[0]["media"] == {"file_info": "FI-1"}
+        assert sends[0]["event_id"] == "E1"
+        assert sends[0]["content"] == "caption"
+    asyncio.run(scenario())
+
+
+def test_c2c_uses_post_c2c_message():
+    async def scenario():
+        from qqofficial_hub import passive_reply as pr
+        calls = []
+
+        async def post_c2c_message(**payload):
+            calls.append(payload)
+
+        client = SimpleNamespace(api=SimpleNamespace(post_c2c_message=post_c2c_message))
+        sent = await pr.send_passive(client, event_id="E1", text="hi", user_openid="U1")
+        assert sent == 1
+        assert calls[0]["openid"] == "U1"
+        assert calls[0]["event_id"] == "E1"
+    asyncio.run(scenario())
+
+
+def test_msg_seq_is_monotonic_not_random():
+    from qqofficial_hub.passive_reply import next_msg_seq
+    values = [next_msg_seq() for _ in range(50)]
+    assert len(set(values)) == 50, "msg_seq must never collide"
+    assert values == sorted(values)
+
+
+def test_ack_types_match_official_docs():
+    """Only type=11/12 need PUT /interactions; 18/19 are delivered without ACK."""
+    from qqofficial_hub import interaction_bridge as ib
+    assert ib.ACK_TYPES == {11, 12}
+    assert 18 in ib.HANDLED_TYPES and 19 in ib.HANDLED_TYPES
+    assert 18 not in ib.ACK_TYPES
+
+
+def test_interaction_ack_id_and_event_id_are_distinct():
+    from qqofficial_hub.passive_reply import interaction_ack_id, passive_event_id
+    i = SimpleNamespace(id="ACK-1", event_id="EVT-1")
+    assert interaction_ack_id(i) == "ACK-1"
+    assert passive_event_id(i) == "EVT-1"

@@ -1,7 +1,6 @@
 """Dispatch a registered command through AstrBot's normal event pipeline."""
 from __future__ import annotations
 
-import random
 from typing import Any
 
 from astrbot.api import logger
@@ -10,18 +9,18 @@ from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.message_components import At, Plain
 from astrbot.api.platform import AstrBotMessage, MessageMember, MessageType
 
+from .passive_reply import (
+    MAX_PASSIVE_REPLIES_PER_EVENT,
+    passive_event_id,
+    send_passive,
+    split_chain,
+)
 
-def passive_event_id(interaction: Any) -> str:
-    """Return the id QQ accepts as ``event_id`` for a passive reply.
-
-    botpy builds Interaction as ``Interaction(api, payload["id"], payload["d"])``
-    where the *envelope* ``id`` becomes ``.event_id`` and ``d["id"]`` becomes
-    ``.id``. Only ``.event_id`` is the platform event id usable for passive
-    messages; ``.id`` is the interaction_id used to ACK
-    ``PUT /interactions/{interaction_id}``. Passing ``.id`` as event_id makes QQ
-    reject the send with "请求参数event_id无效".
-    """
-    return str(getattr(interaction, "event_id", "") or "").strip()
+__all__ = [
+    "HubSyntheticCommandEvent",
+    "dispatch_registered_command",
+    "passive_event_id",
+]
 
 
 class HubSyntheticCommandEvent(AstrMessageEvent):
@@ -37,30 +36,35 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         mention_openid: str = "",
     ):
         group_openid = str(getattr(interaction, "group_openid", "") or "")
+        user_openid = str(getattr(interaction, "user_openid", "") or "")
         member_openid = str(
             getattr(interaction, "group_member_openid", "") or ""
-        )
+        ) or user_openid
+        is_group = bool(group_openid)
+        session_id = group_openid or user_openid
         message = AstrBotMessage()
-        message.type = MessageType.GROUP_MESSAGE
+        message.type = MessageType.GROUP_MESSAGE if is_group else MessageType.FRIEND_MESSAGE
         message.self_id = "qq_official"
-        message.session_id = group_openid
+        message.session_id = session_id
         message.message_id = f"hub-interaction:{getattr(interaction, 'id', '')}"
         message.group_id = group_openid
         message.sender = MessageMember(member_openid, "")
         message.message_str = command
-        message.message = [At(qq="qq_official"), Plain(command)]
+        message.message = ([At(qq="qq_official"), Plain(command)] if is_group
+                           else [Plain(command)])
         message.raw_message = interaction
-        super().__init__(command, message, adapter.meta(), group_openid)
+        super().__init__(command, message, adapter.meta(), session_id)
         self.bot = client
         self._adapter = adapter
         self._mention_openid = mention_openid
         self._group_openid = group_openid
+        self._user_openid = user_openid
         # INTERACTION_CREATE.id is accepted by QQ as a passive-reply credential
         # (docs: send.html, event_id supports "INTERACTION_CREATE"). Using it
         # keeps button replies passive: no proactive-push permission needed and
         # no monthly 4-message proactive quota consumed.
         self._event_id = passive_event_id(interaction)
-        self._event_id_used = False
+        self._replies_used = 0
         self.set_extra("qqhub_synthetic_command", True)
 
     async def send(self, message: MessageChain) -> None:
@@ -91,24 +95,24 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         """Reply using INTERACTION_CREATE's event_id instead of a proactive push.
 
         Returns False so the caller can fall back to the proactive path when the
-        event id is missing, already spent, or rejected by QQ.
+        event id is missing, exhausted, or rejected by QQ. Media is uploaded and
+        sent rather than silently dropped.
         """
-        if not self._event_id or self._event_id_used or not self._group_openid:
+        if not self._event_id or self._replies_used >= MAX_PASSIVE_REPLIES_PER_EVENT:
             return False
-        text = "".join(
-            str(getattr(part, "text", "") or "")
-            for part in (message.chain or [])
-            if part.__class__.__name__ == "Plain"
-        ).strip()
-        if not text:
+        if not self._group_openid and not self._user_openid:
+            return False
+        text, media = split_chain(message.chain or [])
+        if not text and not media:
             return False
         try:
-            await self.bot.api.post_group_message(
-                group_openid=self._group_openid,
-                msg_type=0,
-                content=text,
+            sent = await send_passive(
+                self.bot,
                 event_id=self._event_id,
-                msg_seq=random.randint(1, 10000),
+                text=text,
+                media=media,
+                group_openid=self._group_openid,
+                user_openid=self._user_openid,
             )
         except Exception as exc:
             logger.warning(
@@ -117,7 +121,9 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
                 exc,
             )
             return False
-        self._event_id_used = True
+        if not sent:
+            return False
+        self._replies_used += sent
         return True
 
     async def send_streaming(self, generator, use_fallback: bool = False):

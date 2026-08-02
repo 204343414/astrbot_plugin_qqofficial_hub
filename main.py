@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import random
 import re
 from typing import Any
 
@@ -23,13 +22,14 @@ from .qqofficial_hub.command_dispatch import (
     dispatch_registered_command,
     passive_event_id,
 )
+from .qqofficial_hub.passive_reply import next_msg_seq
 from .qqofficial_hub.store import PanelStore
 from .web import HubWebController
 
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.3.1", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.4.0", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -216,7 +216,7 @@ class QQOfficialHubPlugin(Star):
                 f'<@{member_openid}> '
                 f'{"被动回复" if reply else "主动消息"}旧协议艾特测试成功'
             ),
-            "msg_seq": random.randint(1, 10000),
+            "msg_seq": next_msg_seq(),
         }
         if reply:
             msg_id = str(event.message_obj.message_id or "").strip()
@@ -378,7 +378,7 @@ class QQOfficialHubPlugin(Star):
             "msg_type": 2,
             "markdown": {"content": markdown_content},
             "keyboard": {"content": {"rows": rows}},
-            "msg_seq": random.randint(1, 10000),
+            "msg_seq": next_msg_seq(),
         }
         if msg_id:
             payload["msg_id"] = msg_id
@@ -395,15 +395,20 @@ class QQOfficialHubPlugin(Star):
         # "INTERACTION_CREATE"). Passing it keeps the button reply a *passive*
         # message, so it needs neither the proactive-push permission nor the
         # monthly 4-message proactive quota.
-        task = asyncio.create_task(
-            self._send_configured_panel(
+        #
+        # Await the send instead of fire-and-forget: the ACK code must reflect
+        # the real outcome. Returning 0 while the send failed made the client
+        # show success and hid a genuine bug behind a log line.
+        try:
+            await self._send_configured_panel(
                 context.origin,
                 client=context.client,
                 event_id=passive_event_id(context.interaction) or None,
                 mention_openid=context.member_openid,
             )
-        )
-        task.add_done_callback(self._log_refresh_failure)
+        except Exception:
+            logger.exception("[QQHub] Whiteboard refresh failed")
+            return 1
         return 0
 
     async def _action_test(
@@ -422,14 +427,77 @@ class QQOfficialHubPlugin(Star):
             logger.warning("[QQHub] Cannot read AstrBot admins_id: %s", exc)
             return False
 
+    async def _handle_authorize_event(self, interaction: Any) -> int:
+        """Record type=18/19 authorize events.
+
+        ``authorize_data.scope`` tells us whether proactive push is granted
+        (``group_push`` / ``c2c_push``). Persisting it turns "does this group
+        allow proactive messages?" from a blind retry into a known fact.
+        Docs say these types need no ACK, so the code is informational only.
+        """
+        resolved = getattr(getattr(interaction, "data", None), "resolved", None)
+        authorize = getattr(resolved, "authorize_data", None)
+        scope = str(getattr(authorize, "scope", "") or "")
+        if not scope and isinstance(authorize, dict):
+            scope = str(authorize.get("scope", "") or "")
+        opt_scene = str(getattr(authorize, "opt_scene", "") or "")
+        if not opt_scene and isinstance(authorize, dict):
+            opt_scene = str(authorize.get("opt_scene", "") or "")
+        group_openid = str(getattr(interaction, "group_openid", "") or "")
+        user_openid = str(getattr(interaction, "user_openid", "") or "")
+        try:
+            await self.store.record_authorization(
+                platform_id=self._platform_id_of(None),
+                group_openid=group_openid,
+                user_openid=user_openid,
+                scope=scope,
+                opt_scene=opt_scene,
+            )
+        except Exception as exc:
+            logger.warning("[QQHub] Cannot persist authorization: %s", exc)
+        logger.info(
+            "[QQHub] Authorize event scope=%s scene=%s group=%s user=%s",
+            scope or "?", opt_scene or "?",
+            group_openid[-8:] if group_openid else "-",
+            user_openid[-8:] if user_openid else "-",
+        )
+        return 0
+
+    @staticmethod
+    def _platform_id_of(client: Any) -> str:
+        try:
+            return str(client.platform.meta().id)
+        except Exception:
+            return "qq_official"
+
     async def _handle_interaction(self, client: Any, interaction: Any) -> int:
+        interaction_type = getattr(interaction, "type", None)
+        if interaction_type in (18, 19):
+            return await self._handle_authorize_event(interaction)
+
         resolved = getattr(getattr(interaction, "data", None), "resolved", None)
         data = str(getattr(resolved, "button_data", "") or "")
         parts = data.split(":", 3)
         if len(parts) != 4 or parts[0] != "qqhub" or parts[1] != "v2":
+            if interaction_type == 12:
+                # Quick menus are configured in QQ's admin console and carry a
+                # feature_id instead of our button_data. Nothing is registered
+                # for them yet, so report "operation failed" rather than
+                # pretending success.
+                logger.info(
+                    "[QQHub] Unhandled quick-menu feature_id=%s",
+                    str(getattr(resolved, "feature_id", "") or "?"),
+                )
             return 1
         _, _, nonce, button_id = parts
         group_openid = str(getattr(interaction, "group_openid", "") or "")
+        user_openid = str(getattr(interaction, "user_openid", "") or "")
+        if not group_openid and user_openid:
+            # C2C buttons are delivered without group context. Hub panels are
+            # issued per group, so a single-chat click cannot match a stored
+            # card; refuse explicitly instead of a generic failure.
+            logger.info("[QQHub] C2C button click is not supported yet")
+            return 4
         if not group_openid:
             return 1
         origin = f"{client.platform.meta().id}:GroupMessage:{group_openid}"
@@ -467,9 +535,3 @@ class QQOfficialHubPlugin(Star):
         )
         return await self.actions.execute(action_id, context, params)
 
-    @staticmethod
-    def _log_refresh_failure(task: asyncio.Task) -> None:
-        try:
-            task.result()
-        except Exception:
-            logger.exception("[QQHub] Whiteboard refresh task failed")
