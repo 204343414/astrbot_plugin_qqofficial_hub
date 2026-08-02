@@ -527,6 +527,7 @@ function renderCardList() {
   }
   select.value = currentCardId;
   const named = Boolean(currentCardId);
+  showDeleteConfirm(false);
   $("card-delete").disabled = !named;
   $("card-command-wrap").hidden = !named;
   $("scope").disabled = named;          // named cards are global by design
@@ -543,9 +544,17 @@ $("card-select").addEventListener("change", () => {
   render();
 });
 
+// Never use prompt()/confirm(): the dashboard hosts plugin pages in a sandboxed
+// iframe where they are disabled, so the click appears to do nothing at all.
 $("card-new").onclick = async () => {
-  const id = (prompt("新卡片编号（字母/数字/下划线/短横线）：") || "").trim();
-  if (!id) return;
+  const input = $("card-new-id");
+  const id = input.value.trim();
+  if (!id) { setNotice("请先填写新卡片编号", true); input.focus(); return; }
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) {
+    setNotice("编号只能是字母、数字、下划线、短横线，最长 40 位", true);
+    input.focus();
+    return;
+  }
   if (namedCard(id)) { setNotice(`卡片 ${id} 已存在`, true); return; }
   const template = clonePanel(state.templates.default_panel);
   template.name = id;
@@ -554,18 +563,33 @@ $("card-new").onclick = async () => {
     state.named_cards = [...(state.named_cards || []), result.card]
       .sort((a, b) => a.id.localeCompare(b.id));
     currentCardId = result.card.id;
+    input.value = "";
     renderCardList(); render();
     setNotice(`已新建卡片 ${result.card.id}`);
   } catch (error) { setNotice(error.message || "新建失败", true); }
 };
 
-$("card-delete").onclick = async () => {
+function showDeleteConfirm(visible) {
+  $("card-delete").hidden = visible;
+  $("card-delete-confirm").hidden = !visible;
+  $("card-delete-cancel").hidden = !visible;
+}
+
+$("card-delete").onclick = () => {
   if (!currentCardId) return;
-  if (!confirm(`删除卡片 ${currentCardId}？`)) return;
+  showDeleteConfirm(true);
+  setNotice(`确认删除卡片 ${currentCardId}？此操作不可撤销。`, true);
+};
+
+$("card-delete-cancel").onclick = () => { showDeleteConfirm(false); setNotice(""); };
+
+$("card-delete-confirm").onclick = async () => {
+  if (!currentCardId) return;
   try {
     await bridge.apiPost("cards/delete", { id: currentCardId });
     state.named_cards = (state.named_cards || []).filter((c) => c.id !== currentCardId);
     currentCardId = "";
+    showDeleteConfirm(false);
     renderCardList(); render();
     setNotice("已删除");
   } catch (error) { setNotice(error.message || "删除失败", true); }

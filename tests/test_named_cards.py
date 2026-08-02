@@ -118,3 +118,25 @@ def test_card_count_is_capped():
         with pytest.raises(ValueError, match="最多"):
             await store.save_card("overflow", empty_panel())
     asyncio.run(scenario())
+
+
+def test_editor_never_uses_browser_dialogs():
+    """AstrBot hosts plugin pages in a sandboxed iframe where prompt() and
+    confirm() are disabled. They fail *silently* -- the function exists and
+    returns undefined -- so a button using them simply does nothing.
+    """
+    import re
+    js = Path(__file__).parents[1].joinpath("pages/panels/app.js").read_text("utf-8")
+    code = "\n".join(
+        line for line in js.splitlines() if not line.strip().startswith("//")
+    )
+    for call in (r"\bprompt\s*\(", r"\bconfirm\s*\("):
+        assert not re.search(call, code), f"页面不得调用浏览器弹窗: {call}"
+
+
+def test_editor_has_inline_card_controls():
+    root = Path(__file__).parents[1] / "pages" / "panels"
+    html = (root / "index.html").read_text(encoding="utf-8")
+    for element in ("card-new-id", "card-new", "card-delete",
+                    "card-delete-confirm", "card-delete-cancel"):
+        assert f'id="{element}"' in html, f"缺少 {element}"

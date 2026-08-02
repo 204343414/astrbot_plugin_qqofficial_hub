@@ -35,3 +35,5 @@
 
 .card-tools { display: flex; gap: 8px; margin: 6px 0 4px; }
 .card-tools button { flex: 1; font-size: 12px; padding: 6px 8px; }
+
+.card-tools input { flex: 2; min-width: 0; }
