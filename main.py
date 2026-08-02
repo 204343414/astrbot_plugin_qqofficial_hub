@@ -31,7 +31,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.13.2", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.13.3", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -152,6 +152,7 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
             await self._send_configured_panel(
                 origin,
                 panel=card["panel"],
+                card_id=str(card.get("id") or ""),
                 msg_id=str(event.message_obj.message_id or "") or None,
                 clicker_header=await self._clicker_header(
                     origin, str(event.get_sender_id() or "")
@@ -451,12 +452,15 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         mention_openid: str = "",
         clicker_header: str = "",
         panel: dict[str, Any] | None = None,
+        card_id: str = "",
     ) -> None:
         client = client or self._get_qq_client(origin)
         if panel is None:
             snapshot = await self.store.bootstrap()
             panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
-        nonce = await self.store.issue_panel_card(origin, panel, reply_msg_id=msg_id)
+        nonce = await self.store.issue_panel_card(
+            origin, panel, reply_msg_id=msg_id, card_id=card_id
+        )
         rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
         markdown_content = self._prepend_header(
             await self._render_dynamic_markdown(str(panel["markdown"]), origin),

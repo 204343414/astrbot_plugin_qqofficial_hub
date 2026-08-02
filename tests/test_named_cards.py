@@ -174,3 +174,51 @@ def test_editor_layout_splits_evenly_and_folds_long_sections():
     assert "grid-template-columns:minmax(0,1fr) minmax(0,1fr)" in css, "左右应各占一半"
     assert "max-height:calc(100vh - 150px)" in css, "两栏应各自滚动而非把页面拉长"
     assert html.count('<details class="fold">') >= 4, "长表单应折叠"
+
+
+def test_named_card_buttons_validate_against_their_own_revision():
+    """A named card keeps its own revision counter.
+
+    Validating it against the hub panel's revision made every button on a
+    freshly opened named card report "卡片不存在或已过期".
+    """
+    async def scenario():
+        store = _store()
+        await store.bootstrap()
+        origin = "qq_official:GroupMessage:G1"
+        await store.save_card("game", empty_panel(), "小游戏")
+        card = await store.save_card("game", empty_panel(), "小游戏")
+        panel = card["panel"]
+        assert panel["revision"] != (await store.bootstrap())[
+            "templates"]["default_panel"]["revision"], "前提：两者版本不同"
+        button_id = panel["rows"][0][0]["id"]
+        nonce = await store.issue_panel_card(origin, panel, card_id="game")
+        assert await store.get_issued_button_context(origin, nonce, button_id)
+    asyncio.run(scenario())
+
+
+def test_editing_a_named_card_expires_its_old_buttons():
+    """Bumping a card's revision must still invalidate previously sent cards."""
+    async def scenario():
+        store = _store()
+        await store.bootstrap()
+        origin = "qq_official:GroupMessage:G1"
+        card = await store.save_card("game", empty_panel())
+        button_id = card["panel"]["rows"][0][0]["id"]
+        nonce = await store.issue_panel_card(origin, card["panel"], card_id="game")
+        await store.save_card("game", empty_panel())     # edit -> revision + 1
+        assert await store.get_issued_button_context(origin, nonce, button_id) is None
+    asyncio.run(scenario())
+
+
+def test_hub_panel_buttons_are_unaffected():
+    async def scenario():
+        store = _store()
+        await store.bootstrap()
+        origin = "qq_official:GroupMessage:G1"
+        snapshot = await store.bootstrap()
+        panel = snapshot["templates"]["default_panel"]
+        button_id = panel["rows"][0][0]["id"]
+        nonce = await store.issue_panel_card(origin, panel)
+        assert await store.get_issued_button_context(origin, nonce, button_id)
+    asyncio.run(scenario())

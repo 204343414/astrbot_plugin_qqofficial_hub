@@ -244,7 +244,23 @@ Interaction(self.api, payload.get('id'), payload.get('d', {}))
 - 蓝色链接：显示文字须以 `🔗` 开头；URL 需在 q.qq.com 后台「消息URL配置」预先报备，否则发送失败。
 - 参数指令：`<qqbot-cmd-input text="..." show="..." reference="true|false"/>`，
   text/show 需 URL encode 且解码后 1~100 字符。
-- 群控制面板不支持 `<qqbot-cmd-enter>`。
+- 群控制面板不支持 `<qqbot-cmd-enter>`（回车指令，点击后直接发送）——该能力**群聊与
+  文字子频道均不支持**，仅单聊可用。
+
+### 正文里的蓝色文本没有 type=1 等价物
+
+官方「文本交互」只定义了两种指令标签，**都属于客户端行为**：
+
+| 标签 | 行为 | 群聊可用 |
+| --- | --- | --- |
+| `<qqbot-cmd-input>` | 文本**插入输入框**，用户自行编辑后发送 | ✅ |
+| `<qqbot-cmd-enter>` | 点击后**直接发送**该文本 | ❌ 仅单聊 |
+
+两者最终都是「用户发出一条消息」，都会触发 `GROUP_AT_MESSAGE_CREATE`，
+**不会**产生 `INTERACTION_CREATE`。因此正文蓝色文本**无法**做到 type=1 那样
+「服务端直接执行、不经过聊天框」。
+
+想要 type=1 的即时回调，只能用 **Keyboard 按钮**（`action.type=1`）。
 
 ---
 

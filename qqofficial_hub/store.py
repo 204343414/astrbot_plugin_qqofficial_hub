@@ -133,7 +133,11 @@ class PanelStore:
 
 
     async def issue_panel_card(
-        self, origin: str, panel: dict[str, Any], reply_msg_id: str | None = None
+        self,
+        origin: str,
+        panel: dict[str, Any],
+        reply_msg_id: str | None = None,
+        card_id: str = "",
     ) -> str:
         """Persist an opaque, group-scoped snapshot before sending a callback card."""
         import secrets
@@ -152,6 +156,10 @@ class PanelStore:
                 "expires_at": now + self.callback_ttl_seconds,
                 "panel": copy.deepcopy(panel),
                 "reply_msg_id": str(reply_msg_id or ""),
+                # Which panel this card was rendered from. A named card keeps
+                # its own revision counter, so validating it against the hub
+                # panel's revision would always look stale.
+                "card_id": str(card_id or ""),
             }
             self._write_atomic(self._data)
             return nonce
@@ -167,7 +175,15 @@ class PanelStore:
             panel = item.get("panel")
             if not isinstance(panel, dict):
                 return None
-            current = self._data["group_overrides"].get(origin) or self._data["templates"].get(PANEL_ID)
+            card_id = str(item.get("card_id") or "")
+            if card_id:
+                named = self._data.get("named_cards", {}).get(card_id)
+                current = named.get("panel") if isinstance(named, dict) else None
+            else:
+                current = (
+                    self._data["group_overrides"].get(origin)
+                    or self._data["templates"].get(PANEL_ID)
+                )
             if not isinstance(current, dict) or int(current.get("revision", 0)) != int(panel.get("revision", 0)):
                 return None
             for row in panel.get("rows", []):
