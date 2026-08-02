@@ -44,7 +44,10 @@ class HubWebController:
     async def send_test(self):
         payload: dict[str, Any] = await request.json(default={})
         try:
-            result = await self.plugin.send_panel_from_ui(str(payload.get("origin", "")))
+            result = await self.plugin.send_panel_from_ui(
+                str(payload.get("origin", "")),
+                mode=str(payload.get("mode", "configured")),
+            )
         except (ValueError, RuntimeError) as exc:
             return error_response(str(exc), status_code=400)
         return json_response(result)

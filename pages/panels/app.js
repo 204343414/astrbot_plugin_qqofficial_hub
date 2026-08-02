@@ -266,13 +266,21 @@ async function save() {
     setNotice("已原子保存；版本已更新，旧回调卡自动失效。"); render();
   } catch (error) { setNotice(error.message || "保存失败", true); }
 }
-async function sendTest() {
+async function sendTest(mode = "configured") {
   const origin = $("group").value;
   if (!origin) { setNotice("尚未观察到可测试的 QQ Official 群。", true); return; }
-  const button = $("send-test"); button.disabled = true; button.textContent = "发送中…";
-  try { await bridge.apiPost("send-test", { origin }); setNotice("测试卡已发送，请在群内核对 Markdown、图片、链接、按钮和权限。"); }
+  const ephemeral = mode === "ephemeral";
+  const button = $(ephemeral ? "send-test-ephemeral" : "send-test");
+  const original = button.textContent;
+  button.disabled = true; button.textContent = "发送中…";
+  try {
+    await bridge.apiPost("send-test", { origin, mode });
+    setNotice(ephemeral
+      ? "已按一次性卡片发送：仅 type=1 按钮会保留，可验证一次性与归属限制。"
+      : "测试卡已发送，请在群内核对 Markdown、图片、链接、按钮和权限。");
+  }
   catch (error) { setNotice(error.message || "测试发送失败", true); }
-  finally { button.disabled = false; button.textContent = "发送到群测试"; }
+  finally { button.disabled = false; button.textContent = original; }
 }
 function insertMarkdownSnippet(snippet) {
   const textarea = $("markdown"), start = textarea.selectionStart, end = textarea.selectionEnd;
@@ -365,5 +373,7 @@ $("scope").onchange = () => { selected = null; $("group-wrap").hidden = $("scope
 $("group").onchange = () => { selected = null; render(); };
 $("add").onclick = () => { try { const panel = editablePanel(), row = ensureRow(panel); panel.rows[row].push({ id: `button-${Date.now()}`, label: "新按钮", visited_label: "新按钮", style: 0, action_type: 2, data: "/myrss list", permission: "everyone", specified_users: [], action_params: {}, reply: false, enter: false, anchor: 0, unsupport_tips: "当前 QQ 版本不支持该按钮" }); selected = { row, col: panel.rows[row].length - 1 }; render(); } catch (error) { setNotice(error.message, true); } };
 $("delete").onclick = () => { if (!selected) return; const panel = editablePanel(); panel.rows[selected.row].splice(selected.col, 1); compactRows(panel); selected = null; render(); };
-$("save").onclick = save; $("send-test").onclick = sendTest;
+$("save").onclick = save;
+$("send-test").onclick = () => sendTest("configured");
+$("send-test-ephemeral").onclick = () => sendTest("ephemeral");
 load().catch((error) => setNotice(`加载失败：${error.message}`, true));
