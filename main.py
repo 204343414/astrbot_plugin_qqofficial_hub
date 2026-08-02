@@ -46,7 +46,7 @@ def _authorize_flag(authorize: object):
     return None
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.5.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.6.0", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -384,6 +384,27 @@ class QQOfficialHubPlugin(Star):
             },
         }
 
+    async def _render_dynamic_markdown(self, markdown: str, origin: str) -> str:
+        """Resolve editor-inserted placeholders just before sending.
+
+        Placeholders are opt-in: a card that never inserted one is returned
+        untouched, so blueprint/board-game cards pay nothing for this.
+        """
+        if "{{" not in markdown:
+            return markdown
+        if push_status.has_placeholder(markdown):
+            markdown = push_status.render(
+                markdown,
+                await self.store.get_push_state(origin),
+                lamps=self.push_lamps,
+                templates=self.push_templates,
+            )
+        if "{{group_openid_short}}" in markdown:
+            markdown = markdown.replace(
+                "{{group_openid_short}}", origin.split(":", 2)[-1][-8:]
+            )
+        return markdown
+
     async def _send_configured_panel(
         self,
         origin: str,
@@ -397,14 +418,7 @@ class QQOfficialHubPlugin(Star):
         panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
         nonce = await self.store.issue_panel_card(origin, panel, reply_msg_id=msg_id)
         rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
-        markdown_content = str(panel["markdown"])
-        if push_status.has_placeholder(markdown_content):
-            markdown_content = push_status.render(
-                markdown_content,
-                await self.store.get_push_state(origin),
-                lamps=self.push_lamps,
-                templates=self.push_templates,
-            )
+        markdown_content = await self._render_dynamic_markdown(str(panel["markdown"]), origin)
         # Real-device tests show both documented and legacy At tags are exposed
         # literally on this QQ group path. Keep the setting/card metadata for a
         # future native implementation, but never contaminate visible output.

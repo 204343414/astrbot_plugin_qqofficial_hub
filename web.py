@@ -6,6 +6,7 @@ from astrbot.api.web import error_response, json_response, request
 from astrbot.api.star import Context
 
 from .qqofficial_hub.command_catalog import build_command_catalog
+from .qqofficial_hub.snippets import catalog as snippet_catalog
 from .qqofficial_hub.store import PanelStore
 
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
@@ -26,6 +27,7 @@ class HubWebController:
         payload = await self.store.bootstrap()
         payload["command_catalog"] = build_command_catalog(self.context)
         payload["action_catalog"] = self.plugin.get_action_catalog()
+        payload["snippet_catalog"] = snippet_catalog()
         return json_response(payload)
 
     async def save_panel(self):

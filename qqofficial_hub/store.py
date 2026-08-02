@@ -23,7 +23,7 @@ def empty_panel() -> dict[str, Any]:
     return {
         "id": PANEL_ID,
         "name": "QQ Official Hub 能力测试卡",
-        "markdown": "# QQ Official Hub 能力测试卡\n**Markdown 正文**、[🔗蓝色链接](https://bot.q.qq.com/) 与最多 5×5 个按钮。\n{{push_lamp}} {{push_status}}",
+        "markdown": "# QQ Official Hub 能力测试卡\n**Markdown 正文**、[🔗蓝色链接](https://bot.q.qq.com/) 与最多 5×5 个按钮。",
         "mention_clicker": True,
         "rows": [
             [

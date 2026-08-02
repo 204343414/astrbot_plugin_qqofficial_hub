@@ -57,9 +57,19 @@ function renderInline(target, text) {
   }
   target.append(document.createTextNode(text.slice(cursor)));
 }
+const PREVIEW_TOKENS = {
+  "{{push_lamp}}": "🔴",
+  "{{push_status}}": "当前群未开启主动消息推送功能",
+  "{{group_openid_short}}": "1A2B3C4D",
+};
+function previewTokens(text) {
+  let out = String(text || "");
+  for (const [token, sample] of Object.entries(PREVIEW_TOKENS)) out = out.split(token).join(sample);
+  return out;
+}
 function renderMarkdown(text, targetId = "preview-markdown") {
   const root = $(targetId); root.innerHTML = "";
-  for (const raw of String(text || "").split("\n")) {
+  for (const raw of previewTokens(text).split("\n")) {
     let line = raw, tag = "p";
     if (line.startsWith("### ")) { tag = "h3"; line = line.slice(4); }
     else if (line.startsWith("## ")) { tag = "h2"; line = line.slice(3); }
@@ -152,6 +162,45 @@ function editSelected() {
   button.reply = $("reply").checked; button.enter = $("enter").checked; button.anchor = $("anchor").checked ? 1 : 0;
   button.unsupport_tips = $("unsupport-tips").value; render();
 }
+
+function renderSnippetLibrary() {
+  const host = $("snippet-groups");
+  if (!host) return;
+  host.innerHTML = "";
+  const items = state.snippet_catalog || [];
+  const groups = new Map();
+  for (const item of items) {
+    if (!groups.has(item.group)) groups.set(item.group, []);
+    groups.get(item.group).push(item);
+  }
+  for (const [groupName, entries] of groups) {
+    const section = document.createElement("div");
+    section.className = "snippet-group";
+    const title = document.createElement("h4");
+    title.textContent = groupName;
+    section.append(title);
+    const row = document.createElement("div");
+    row.className = "snippet-row";
+    for (const entry of entries) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary snippet-chip";
+      button.textContent = entry.label;
+      if (entry.dynamic) {
+        const badge = document.createElement("span");
+        badge.className = "dyn-badge";
+        badge.textContent = "动态";
+        button.append(badge);
+      }
+      button.title = entry.hint || "";
+      button.onclick = () => insertMarkdownSnippet(entry.snippet);
+      row.append(button);
+    }
+    section.append(row);
+    host.append(section);
+  }
+}
+
 function ensureRow(panel) { if (!panel.rows.length || panel.rows.at(-1).length >= 5) { if (panel.rows.length >= 5) throw Error("已经达到5行上限"); panel.rows.push([]); } return panel.rows.length - 1; }
 async function load() {
   await bridge.ready(); state = await bridge.apiGet("bootstrap"); const groups = $("group"); groups.innerHTML = "";
@@ -168,6 +217,7 @@ async function load() {
     option.textContent = `${item.command}${item.parameters ? `  (${item.parameters})` : ""}${item.permission === "admin" ? "  🔒" : ""}`;
     preset.append(option);
   }
+  renderSnippetLibrary();
   $("group-wrap").hidden = !groups.options.length; if (!groups.options.length) $("scope").value = "global"; render();
 }
 async function save() {
