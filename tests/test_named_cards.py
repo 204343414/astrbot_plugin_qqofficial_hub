@@ -140,3 +140,37 @@ def test_editor_has_inline_card_controls():
     for element in ("card-new-id", "card-new", "card-delete",
                     "card-delete-confirm", "card-delete-cancel"):
         assert f'id="{element}"' in html, f"缺少 {element}"
+
+
+def test_command_match_survives_the_stripped_wake_prefix():
+    """AstrBot's WakingCheck removes the wake prefix before plugins run.
+
+    ``event.message_str`` is therefore "小游戏", not "/小游戏". Matching on a
+    leading slash silently found nothing -- no error, no log, no reply.
+    """
+    source = Path(__file__).parents[1].joinpath("main.py").read_text("utf-8")
+    handler = source[source.index("async def open_named_card_by_command"):]
+    handler = handler[: handler.index("\n    @filter.")]
+    assert 'if not text.startswith("/")' not in handler, "不得依赖前导斜杠"
+    assert 'lstrip("/")' in handler, "应同时接受带/不带斜杠两种形式"
+    assert "message_obj" in handler, "还应回退检查未被剥前缀的原始文本"
+
+
+def test_command_lookup_ignores_a_leading_slash():
+    async def scenario():
+        store = _store()
+        await store.bootstrap()
+        await store.save_card("game", empty_panel(), "小游戏")
+        for probe in ("小游戏", "/小游戏", "  /小游戏  "):
+            found = await store.find_card_by_command(probe)
+            assert found and found["id"] == "game", probe
+    asyncio.run(scenario())
+
+
+def test_editor_layout_splits_evenly_and_folds_long_sections():
+    root = Path(__file__).parents[1] / "pages" / "panels"
+    css = (root / "styles.css").read_text(encoding="utf-8")
+    html = (root / "index.html").read_text(encoding="utf-8")
+    assert "grid-template-columns:minmax(0,1fr) minmax(0,1fr)" in css, "左右应各占一半"
+    assert "max-height:calc(100vh - 150px)" in css, "两栏应各自滚动而非把页面拉长"
+    assert html.count('<details class="fold">') >= 4, "长表单应折叠"

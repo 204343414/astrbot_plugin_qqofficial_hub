@@ -31,7 +31,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.13.1", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.13.2", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -128,12 +128,25 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         origin = str(getattr(event, "unified_msg_origin", "") or "")
         if "GroupMessage" not in origin:
             return
-        text = str(event.get_message_str() or "").strip()
-        if not text.startswith("/"):
-            return
-        card = await self.store.find_card_by_command(text[1:].split()[0] if text[1:].split() else "")
+        # WakingCheck strips the wake prefix, so by the time a plugin sees the
+        # event "/小游戏" has already become "小游戏". Checking for a leading
+        # slash here silently matched nothing. Inspect both forms.
+        candidates = []
+        for raw in (
+            str(event.get_message_str() or ""),
+            str(getattr(getattr(event, "message_obj", None), "message_str", "") or ""),
+        ):
+            head = raw.strip().lstrip("/").strip().split()
+            if head:
+                candidates.append(head[0])
+        card = None
+        for name in candidates:
+            card = await self.store.find_card_by_command(name)
+            if card is not None:
+                break
         if card is None:
             return
+        logger.info("[QQHub] Opening named card %s via command", card.get("id"))
         event.stop_event()
         try:
             await self._send_configured_panel(
