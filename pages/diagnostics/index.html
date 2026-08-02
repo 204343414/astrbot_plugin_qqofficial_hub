@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Hub 运行诊断</title><link rel="stylesheet" href="./styles.css"></head>
+<body><main>
+<header>
+  <div><p class="eyebrow">QQ OFFICIAL HUB</p><h1>运行诊断</h1>
+  <p class="sub">列出当前进程内所有已注册模块、API、Action 与卡片提供者。全部实时枚举，不写死清单——插件热插拔后刷新即可看到变化。</p></div>
+  <div class="header-actions"><button id="refresh" class="primary">刷新</button></div>
+</header>
+<p id="notice" role="status"></p>
+<section id="summary" class="cards"></section>
+<section id="report"></section>
+</main><script type="module" src="./app.js"></script></body></html>

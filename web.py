@@ -6,6 +6,7 @@ from astrbot.api.web import error_response, json_response, request
 from astrbot.api.star import Context
 
 from .qqofficial_hub.command_catalog import build_command_catalog
+from .qqofficial_hub.diagnostics import build_report
 from .qqofficial_hub.snippets import catalog as snippet_catalog
 from .qqofficial_hub.store import PanelStore
 
@@ -22,6 +23,7 @@ class HubWebController:
         self.context.register_web_api(f"/{PLUGIN_NAME}/bootstrap", self.bootstrap, ["GET"], "QQ Hub editor bootstrap")
         self.context.register_web_api(f"/{PLUGIN_NAME}/panel", self.save_panel, ["POST"], "Save QQ Hub panel")
         self.context.register_web_api(f"/{PLUGIN_NAME}/send-test", self.send_test, ["POST"], "Send panel to an observed QQ group")
+        self.context.register_web_api(f"/{PLUGIN_NAME}/diagnostics", self.diagnostics, ["GET"], "QQ Hub runtime diagnostics")
 
     async def bootstrap(self):
         payload = await self.store.bootstrap()
@@ -51,3 +53,6 @@ class HubWebController:
         except (ValueError, RuntimeError) as exc:
             return error_response(str(exc), status_code=400)
         return json_response(result)
+
+    async def diagnostics(self):
+        return json_response(await build_report(self.plugin))

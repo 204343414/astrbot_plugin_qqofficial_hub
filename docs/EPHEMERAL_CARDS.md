@@ -69,7 +69,8 @@ card = {
 ## 发送卡片
 
 ```python
-hub = context.get_registered_star("astrbot_plugin_qqofficial_hub").star_cls_obj
+star = context.get_registered_star("astrbot_plugin_qqofficial_hub")
+hub = star.star_cls if star else None          # star_cls 是实例，star_cls_type 是类
 
 session_id = await hub.send_ephemeral_card(
     origin,                 # "平台ID:GroupMessage:群openid"
