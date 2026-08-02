@@ -1,0 +1,253 @@
+"""Ephemeral cards: short-lived, code-generated panels for flows and games.
+
+Why this exists separately from the configured panel
+----------------------------------------------------
+The configured panel is *one per group* and is deliberately invalidated by a
+``revision`` bump, so a stale card can never execute newly-granted permissions.
+That is right for configuration, and fatal for anything dynamic: a game sends a
+fresh card every turn, and bumping the group's revision each move would both
+pollute group config and let old cards be replayed.
+
+Ephemeral cards therefore live in their own table with their own rules:
+
+* **one-shot** -- a card (or a single button) may declare itself consumable, so
+  clicking it once retires it. Without this a player can click the same cell
+  twice, or spam an action;
+* **ownership** -- a card may be bound to the OpenID it was issued for. Someone
+  else clicking gets a "not your turn" refusal instead of hijacking the move;
+* **flow** -- a button may declare ``next_card``, letting menus, questionnaires
+  and loops be expressed without any code;
+* **session** -- cards carry a ``session_id`` so a whole game's cards can be
+  retired together when the match ends.
+
+Concurrency note: the mutating helpers are executed under the store's lock by
+the caller, so claim-then-act is atomic. That is what makes the one-shot check
+a real guard rather than a racy hint.
+"""
+from __future__ import annotations
+
+import copy
+import re
+import secrets
+import time
+from typing import Any
+
+#: A game/flow can legitimately outlive a config card, but not forever.
+DEFAULT_TTL_SECONDS = 3600
+MAX_TTL_SECONDS = 86400
+
+CARD_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
+
+# Refusal codes mirror QQ's PUT /interactions contract so the client shows a
+# sensible toast: 3 = duplicate/expired, 4 = no permission.
+CODE_OK = 0
+CODE_FAILED = 1
+CODE_DUPLICATE = 3
+CODE_FORBIDDEN = 4
+
+
+class EphemeralError(Exception):
+    """Raised with an ACK code so callers can answer QQ accurately."""
+
+    def __init__(self, message: str, code: int = CODE_FAILED) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def new_session_id() -> str:
+    return secrets.token_urlsafe(12)
+
+
+def new_nonce() -> str:
+    return secrets.token_urlsafe(18)
+
+
+def validate_card(value: object) -> dict[str, Any]:
+    """Validate a code-generated ephemeral card.
+
+    Deliberately strict: these cards come from other plugins, and a malformed
+    card must fail here rather than at QQ.
+    """
+    if not isinstance(value, dict):
+        raise EphemeralError("卡片必须是对象")
+    card_id = str(value.get("id") or "").strip()
+    if card_id and not CARD_ID_RE.fullmatch(card_id):
+        raise EphemeralError("卡片 ID 只能包含字母、数字、点、下划线、冒号、横线")
+    markdown = str(value.get("markdown") or "").strip()
+    if not markdown or len(markdown) > 4000:
+        raise EphemeralError("卡片 Markdown 必须为 1~4000 字符")
+
+    rows = value.get("rows") or []
+    if not isinstance(rows, list) or len(rows) > 5:
+        raise EphemeralError("按钮最多 5 行")
+    normalized: list[list[dict[str, Any]]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, list) or len(row) > 5:
+            raise EphemeralError("每行最多 5 个按钮")
+        built = []
+        for button in row:
+            item = _validate_button(button)
+            if item["id"] in seen:
+                raise EphemeralError(f"按钮 ID 重复: {item['id']}")
+            seen.add(item["id"])
+            built.append(item)
+        normalized.append(built)
+
+    ttl = int(value.get("ttl_seconds") or DEFAULT_TTL_SECONDS)
+    if ttl <= 0 or ttl > MAX_TTL_SECONDS:
+        raise EphemeralError(f"ttl_seconds 必须在 1~{MAX_TTL_SECONDS} 之间")
+
+    return {
+        "id": card_id or "ephemeral",
+        "markdown": markdown,
+        "rows": normalized,
+        # Card-level one-shot: the whole card retires after any button click.
+        "one_shot": bool(value.get("one_shot", False)),
+        # Ownership: only this OpenID may click. Empty means anyone.
+        "owner_openid": str(value.get("owner_openid") or "").strip(),
+        "owner_reject_tip": str(value.get("owner_reject_tip") or "").strip(),
+        "ttl_seconds": ttl,
+    }
+
+
+def _validate_button(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise EphemeralError("按钮必须是对象")
+    label = str(value.get("label") or "").strip()
+    if not label or len(label) > 64:
+        raise EphemeralError("按钮文字必须为 1~64 字符")
+    button_id = str(value.get("id") or "").strip() or f"button-{label}"
+    if not CARD_ID_RE.fullmatch(button_id):
+        raise EphemeralError("按钮 ID 含非法字符")
+    action_id = str(value.get("action_id") or "").strip()
+    next_card = str(value.get("next_card") or "").strip()
+    if not action_id and not next_card:
+        raise EphemeralError("按钮必须指定 action_id 或 next_card")
+    if action_id and not CARD_ID_RE.fullmatch(action_id):
+        raise EphemeralError("action_id 含非法字符")
+    if next_card and not CARD_ID_RE.fullmatch(next_card):
+        raise EphemeralError("next_card 含非法字符")
+    params = value.get("params") or {}
+    if not isinstance(params, dict):
+        raise EphemeralError("按钮 params 必须是 JSON 对象")
+    style = value.get("style", 0)
+    if style not in {0, 1}:
+        raise EphemeralError("按钮样式只能是 0 或 1")
+    return {
+        "id": button_id,
+        "label": label,
+        "visited_label": str(value.get("visited_label") or label).strip()[:64],
+        "style": style,
+        "action_id": action_id,
+        "next_card": next_card,
+        "params": params,
+        # Button-level one-shot: only this button retires, card stays usable.
+        "one_shot": bool(value.get("one_shot", False)),
+        # Button-level ownership overrides the card's when set.
+        "owner_openid": str(value.get("owner_openid") or "").strip(),
+        "unsupport_tips": str(
+            value.get("unsupport_tips") or "当前 QQ 版本不支持该按钮"
+        ).strip()[:80],
+    }
+
+
+def build_record(origin: str, card: dict[str, Any], session_id: str) -> dict[str, Any]:
+    now = int(time.time())
+    return {
+        "origin": origin,
+        "session_id": session_id,
+        "card": copy.deepcopy(card),
+        "issued_at": now,
+        "expires_at": now + int(card["ttl_seconds"]),
+        "consumed": False,
+        "used_buttons": [],
+    }
+
+
+def resolve_click(
+    record: object,
+    origin: str,
+    button_id: str,
+    member_openid: str,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Validate a click against an issued ephemeral card.
+
+    Raises :class:`EphemeralError` carrying the ACK code QQ should receive.
+    Returns the matched button on success.
+    """
+    now = int(time.time()) if now is None else now
+    if not isinstance(record, dict):
+        raise EphemeralError("卡片不存在或已过期", CODE_DUPLICATE)
+    if record.get("origin") != origin:
+        # Cross-group replay of a leaked nonce.
+        raise EphemeralError("卡片不属于本群", CODE_FORBIDDEN)
+    if int(record.get("expires_at", 0)) <= now:
+        raise EphemeralError("卡片已过期", CODE_DUPLICATE)
+    if record.get("consumed"):
+        raise EphemeralError("卡片已使用", CODE_DUPLICATE)
+
+    card = record.get("card") or {}
+    button = None
+    for row in card.get("rows", []):
+        for item in row:
+            if item.get("id") == button_id:
+                button = item
+                break
+        if button:
+            break
+    if button is None:
+        raise EphemeralError("按钮不存在", CODE_FAILED)
+
+    if button_id in (record.get("used_buttons") or []):
+        raise EphemeralError("该按钮已使用", CODE_DUPLICATE)
+
+    owner = str(button.get("owner_openid") or card.get("owner_openid") or "")
+    if owner and member_openid != owner:
+        # Someone else's turn: refuse rather than acting on their behalf.
+        raise EphemeralError(
+            str(card.get("owner_reject_tip") or "这不是你的操作"), CODE_FORBIDDEN
+        )
+    return copy.deepcopy(button)
+
+
+def apply_consumption(record: dict[str, Any], button: dict[str, Any]) -> None:
+    """Mark the click as spent. Caller must hold the store lock."""
+    card = record.get("card") or {}
+    if card.get("one_shot"):
+        record["consumed"] = True
+    if button.get("one_shot"):
+        used = list(record.get("used_buttons") or [])
+        if button["id"] not in used:
+            used.append(button["id"])
+        record["used_buttons"] = used
+
+
+def to_keyboard_rows(card: dict[str, Any], nonce: str) -> list[dict[str, Any]]:
+    """Render to QQ keyboard payload.
+
+    All ephemeral buttons are type=1 callbacks: the click must reach the server
+    so one-shot and ownership can be enforced. ``button_data`` stays opaque --
+    real parameters live in the server-side snapshot.
+    """
+    rows = []
+    for row in card.get("rows", []):
+        buttons = []
+        for item in row:
+            buttons.append({
+                "id": item["id"],
+                "render_data": {
+                    "label": item["label"],
+                    "visited_label": item["visited_label"],
+                    "style": item["style"],
+                },
+                "action": {
+                    "type": 1,
+                    "permission": {"type": 2},
+                    "data": f"qqhub:e1:{nonce}:{item['id']}",
+                    "unsupport_tips": item["unsupport_tips"],
+                },
+            })
+        rows.append({"buttons": buttons})
+    return rows

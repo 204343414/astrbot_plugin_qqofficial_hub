@@ -21,6 +21,19 @@ class ActionContext:
 
 
 @dataclass(frozen=True, slots=True)
+class EphemeralContext:
+    """Passed to a card provider when a ``next_card`` button is clicked."""
+
+    client: Any
+    interaction: Any
+    origin: str
+    group_openid: str
+    member_openid: str
+    session_id: str = ""
+    params: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ActionSpec:
     action_id: str
     title: str

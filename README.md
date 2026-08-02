@@ -66,6 +66,17 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 私聊/C2C 暂不发送 Hub 卡片；当普通 LLM 对话关闭时，用户私聊机器人会收到“请在群聊中 @我 输入 /qqhub 查看功能。”的短提示。
 
 
+## 一次性卡片（流程 / 游戏）
+
+除「每群一张、改版即失效」的配置面板外，Hub 还提供**一次性卡片**：由其他插件
+用代码生成，支持 `one_shot`（点一次即失效）、`owner_openid`（绑定点击者）、
+`next_card`（静态跳转，可表达分支与循环）、`session_id`（整局回收）。
+
+游戏请写成独立插件，通过 `hub.actions.register(...)` 与
+`hub.send_ephemeral_card(...)` 接入，Hub 只提供机制。
+
+完整 API 与 QQ 平台限制见 **[docs/EPHEMERAL_CARDS.md](docs/EPHEMERAL_CARDS.md)**。
+
 ## 平台隔离
 
 插件所有事件入口都带 QQ 官方适配器门禁：

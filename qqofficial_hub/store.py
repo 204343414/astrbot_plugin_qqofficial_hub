@@ -222,6 +222,68 @@ class PanelStore:
             item = self._data.get("authorizations", {}).get(f"{platform_id}:{target}")
             return copy.deepcopy(item) if isinstance(item, dict) else None
 
+    async def issue_ephemeral_card(
+        self, origin: str, card: dict[str, Any], session_id: str = ""
+    ) -> tuple[str, str]:
+        """Store a validated ephemeral card. Returns ``(nonce, session_id)``."""
+        from . import ephemeral
+        if not self._valid_group_origin(origin):
+            raise ValueError("卡片只能发送到 QQ Official 群")
+        session_id = session_id or ephemeral.new_session_id()
+        async with self._lock:
+            table = self._data.setdefault("ephemeral_cards", {})
+            self._prune_ephemeral(table)
+            nonce = ephemeral.new_nonce()
+            table[nonce] = ephemeral.build_record(origin, card, session_id)
+            self._write_atomic(self._data)
+            return nonce, session_id
+
+    async def claim_ephemeral_click(
+        self, origin: str, nonce: str, button_id: str, member_openid: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Validate and atomically consume a click.
+
+        Validation and consumption happen inside one lock acquisition so two
+        simultaneous clicks cannot both pass a one-shot check.
+        Raises ``ephemeral.EphemeralError`` with an ACK code on refusal.
+        """
+        from . import ephemeral
+        async with self._lock:
+            table = self._data.setdefault("ephemeral_cards", {})
+            record = table.get(nonce)
+            button = ephemeral.resolve_click(record, origin, button_id, member_openid)
+            ephemeral.apply_consumption(record, button)
+            self._write_atomic(self._data)
+            return button, copy.deepcopy(record)
+
+    async def end_ephemeral_session(self, session_id: str) -> int:
+        """Retire every card of a session, e.g. when a match ends."""
+        if not session_id:
+            return 0
+        async with self._lock:
+            table = self._data.setdefault("ephemeral_cards", {})
+            removed = [k for k, v in table.items()
+                       if isinstance(v, dict) and v.get("session_id") == session_id]
+            for key in removed:
+                table.pop(key, None)
+            if removed:
+                self._write_atomic(self._data)
+            return len(removed)
+
+    @staticmethod
+    def _prune_ephemeral(table: dict[str, Any]) -> None:
+        import time
+        now = int(time.time())
+        for key, item in list(table.items()):
+            if not isinstance(item, dict) or int(item.get("expires_at", 0)) <= now:
+                table.pop(key, None)
+        # Hard cap so a runaway plugin cannot grow the state file without bound.
+        if len(table) > 2000:
+            for key in sorted(
+                table, key=lambda k: int(table[k].get("issued_at", 0))
+            )[: len(table) - 2000]:
+                table.pop(key, None)
+
     def _valid_group_origin(self, origin: str) -> bool:
         parts = origin.split(":", 2)
         return len(parts) == 3 and parts[1] == "GroupMessage" and bool(parts[0]) and bool(parts[2])
