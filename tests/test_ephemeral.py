@@ -221,3 +221,81 @@ def test_ephemeral_cards_do_not_touch_group_config():
         assert before == after
         assert ORIGIN not in (await store.bootstrap())["group_overrides"]
     asyncio.run(scenario())
+
+
+# --- owner modes: the "what is invalid" question -----------------------------
+
+def test_specified_mode_rejects_empty_openid():
+    """A lock with an empty key matches nobody -- the card would be dead."""
+    with pytest.raises(ep.EphemeralError, match="不能为空"):
+        ep.validate_card({"markdown": "x", "owner_mode": "specified",
+                          "rows": [[{"id": "a", "label": "A", "action_id": "x"}]]})
+
+
+def test_button_specified_mode_rejects_empty_openid():
+    with pytest.raises(ep.EphemeralError, match="不能为空"):
+        ep.validate_card({"markdown": "x", "rows": [[
+            {"id": "a", "label": "A", "action_id": "x", "owner_mode": "specified"}
+        ]]})
+
+
+def test_initiator_mode_fails_loudly_without_an_initiator():
+    """Proactive push / scheduled / WebUI test send has no initiator.
+
+    Downgrading to "everyone" would look locked while being wide open, so the
+    send must fail instead.
+    """
+    card = ep.validate_card({"markdown": "x", "owner_mode": "initiator",
+                             "rows": [[{"id": "a", "label": "A", "action_id": "x"}]]})
+    with pytest.raises(ep.EphemeralError, match="没有发起者"):
+        ep.bind_initiator(card, "")
+
+
+def test_initiator_mode_binds_the_clicker():
+    card = ep.validate_card({"markdown": "x", "owner_mode": "initiator",
+                             "rows": [[{"id": "a", "label": "A", "action_id": "x"}]]})
+    bound = ep.bind_initiator(card, ALICE)
+    assert bound["owner_openid"] == ALICE
+    record = ep.build_record(ORIGIN, bound, "s1")
+    with pytest.raises(ep.EphemeralError) as err:
+        ep.resolve_click(record, ORIGIN, "a", BOB)
+    assert err.value.code == ep.CODE_FORBIDDEN
+    assert ep.resolve_click(record, ORIGIN, "a", ALICE)["id"] == "a"
+
+
+def test_button_initiator_binds_independently():
+    card = ep.validate_card({"markdown": "x", "rows": [[
+        {"id": "mine", "label": "A", "action_id": "x", "owner_mode": "initiator"},
+        {"id": "open", "label": "B", "action_id": "x"},
+    ]]})
+    bound = ep.bind_initiator(card, ALICE)
+    record = ep.build_record(ORIGIN, bound, "s1")
+    with pytest.raises(ep.EphemeralError):
+        ep.resolve_click(record, ORIGIN, "mine", BOB)
+    # the unrestricted sibling stays open to everyone
+    assert ep.resolve_click(record, ORIGIN, "open", BOB)["id"] == "open"
+
+
+def test_everyone_mode_ignores_a_stray_openid():
+    card = ep.validate_card({"markdown": "x", "owner_mode": "everyone",
+                             "owner_openid": "LEFTOVER",
+                             "rows": [[{"id": "a", "label": "A", "action_id": "x"}]]})
+    assert card["owner_openid"] == "", "stale value must not silently lock the card"
+    record = ep.build_record(ORIGIN, card, "s1")
+    assert ep.resolve_click(record, ORIGIN, "a", BOB)["id"] == "a"
+
+
+def test_bare_openid_still_implies_specified_mode():
+    """Backwards compatibility with cards written before owner_mode existed."""
+    card = ep.validate_card({"markdown": "x", "owner_openid": ALICE,
+                             "rows": [[{"id": "a", "label": "A", "action_id": "x"}]]})
+    assert card["owner_mode"] == "specified"
+    record = ep.build_record(ORIGIN, card, "s1")
+    with pytest.raises(ep.EphemeralError):
+        ep.resolve_click(record, ORIGIN, "a", BOB)
+
+
+def test_bind_initiator_is_noop_without_initiator_mode():
+    card = ep.validate_card({"markdown": "x",
+                             "rows": [[{"id": "a", "label": "A", "action_id": "x"}]]})
+    assert ep.bind_initiator(card, "") == card

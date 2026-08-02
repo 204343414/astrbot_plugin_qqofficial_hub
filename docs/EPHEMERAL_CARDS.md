@@ -15,7 +15,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | `one_shot` | 卡片级或按钮级声明，点一次即失效 |
-| `owner_openid` | 绑定 OpenID，别人点击返回"这不是你的操作" |
+| `owner_mode` | `everyone` / `initiator`（发起者） / `specified`（指定 OpenID） |
 | `next_card` | 静态跳转，无需写代码即可表达分支与循环 |
 | `session_id` | 一局游戏的所有卡片可一次性回收 |
 | `ttl_seconds` | 默认 1 小时，上限 24 小时 |
@@ -29,7 +29,8 @@ card = {
     "id": "board",                 # 可选，供 next_card 引用
     "markdown": "# 井字棋\n轮到 ⭕",
     "one_shot": True,              # 卡片级：任一按钮点后整张失效
-    "owner_openid": "OPENID_A",    # 仅此人可点，留空=所有人
+    "owner_mode": "initiator",     # everyone / initiator / specified
+    "owner_openid": "",            # 仅 specified 需要；initiator 发送时自动填
     "owner_reject_tip": "现在轮到对手",
     "ttl_seconds": 3600,
     "rows": [                      # 最多 5 行 × 每行 5 个
@@ -144,3 +145,34 @@ await hub.end_ephemeral_session(session_id)   # 该局所有卡片立即失效
 
 **因此**：回合制、公开信息、点击驱动的游戏（井字棋、五子棋、投票、抽卡）可行；
 需要私密信息（狼人杀夜晚）或定时推进的游戏会被额度卡死——私聊主动消息同样每月 4 条。
+
+
+---
+
+## 归属模式与两种非法情况
+
+`owner_mode` 有三种取值，编辑器与后端都会校验：
+
+| 模式 | 含义 | 何时解析 |
+| --- | --- | --- |
+| `everyone` | 所有人可点（默认） | — |
+| `initiator` | 仅**发起者**，即点击/触发本卡的人 | **发送时** |
+| `specified` | 指定字面 OpenID | 编辑时 |
+
+### 非法一：`specified` 但 OpenID 为空
+
+锁上了却没有钥匙 —— 谁都匹配不上，**卡片变砖**。校验直接拒绝。
+
+### 非法二：`initiator` 但本次发送没有发起者
+
+这正是主动推送、定时任务、WebUI「发送到群测试」的情况：无人点击，
+何来发起者。此时 `bind_initiator()` 会**抛错而不是降级为"所有人"** ——
+静默降级会让卡片看起来锁着、实际全群可点，属于安全事故。
+
+```python
+await hub.send_ephemeral_card(origin, card, initiator_openid=member)  # 由点击触发
+await hub.send_ephemeral_card(origin, card)   # 无发起者：若卡片要 initiator 则报错
+```
+
+> 兼容性：只写 `owner_openid` 不写 `owner_mode` 的老卡片，自动视为 `specified`。
+> `owner_mode="everyone"` 时残留的 `owner_openid` 会被清空，避免"看起来没锁其实锁着"。

@@ -12,3 +12,7 @@
 .snippet-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .snippet-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12px; border-radius: 999px; }
 .dyn-badge { display: inline-block; padding: 1px 6px; border-radius: 999px; font-size: 10px; line-height: 1.5; background: rgba(56, 189, 248, .18); color: #0284c7; border: 1px solid rgba(56, 189, 248, .35); }
+
+.ephemeral-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(148, 163, 184, .25); }
+.ephemeral-box h3 { margin: 0 0 4px; font-size: 14px; }
+.warn { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.5; background: rgba(251, 191, 36, .14); border: 1px solid rgba(251, 191, 36, .4); }

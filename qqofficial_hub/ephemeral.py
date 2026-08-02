@@ -38,6 +38,14 @@ MAX_TTL_SECONDS = 86400
 
 CARD_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
 
+#: Who may click.
+#:
+#: ``everyone``   -- no restriction.
+#: ``initiator``  -- whoever triggered this card. Resolved at *send* time, so a
+#:                   card designed in the editor need not know the OpenID.
+#: ``specified``  -- a literal OpenID, which must be non-empty.
+OWNER_MODES = ("everyone", "initiator", "specified")
+
 # Refusal codes mirror QQ's PUT /interactions contract so the client shows a
 # sensible toast: 3 = duplicate/expired, 4 = no permission.
 CODE_OK = 0
@@ -98,17 +106,37 @@ def validate_card(value: object) -> dict[str, Any]:
     if ttl <= 0 or ttl > MAX_TTL_SECONDS:
         raise EphemeralError(f"ttl_seconds 必须在 1~{MAX_TTL_SECONDS} 之间")
 
+    owner_mode, owner_openid = _validate_owner(value, "卡片")
     return {
         "id": card_id or "ephemeral",
         "markdown": markdown,
         "rows": normalized,
         # Card-level one-shot: the whole card retires after any button click.
         "one_shot": bool(value.get("one_shot", False)),
-        # Ownership: only this OpenID may click. Empty means anyone.
-        "owner_openid": str(value.get("owner_openid") or "").strip(),
+        "owner_mode": owner_mode,
+        # Only meaningful for owner_mode="specified"; "initiator" is filled in
+        # at send time.
+        "owner_openid": owner_openid,
         "owner_reject_tip": str(value.get("owner_reject_tip") or "").strip(),
         "ttl_seconds": ttl,
     }
+
+
+def _validate_owner(value: dict, what: str) -> tuple[str, str]:
+    """Normalise owner settings, rejecting the two ways they can be useless."""
+    raw_openid = str(value.get("owner_openid") or "").strip()
+    mode = str(value.get("owner_mode") or "").strip()
+    if not mode:
+        # Backwards compatible: a literal OpenID implies "specified".
+        mode = "specified" if raw_openid else "everyone"
+    if mode not in OWNER_MODES:
+        raise EphemeralError(f"{what}归属模式无效")
+    if mode == "specified" and not raw_openid:
+        # A lock with an empty key matches nobody: the card would be dead.
+        raise EphemeralError(f"{what}选择了「指定 OpenID」，OpenID 不能为空")
+    if mode != "specified":
+        raw_openid = ""
+    return mode, raw_openid
 
 
 def _validate_button(value: object) -> dict[str, Any]:
@@ -134,6 +162,7 @@ def _validate_button(value: object) -> dict[str, Any]:
     style = value.get("style", 0)
     if style not in {0, 1}:
         raise EphemeralError("按钮样式只能是 0 或 1")
+    _button_owner = _validate_owner(value, "按钮")
     return {
         "id": button_id,
         "label": label,
@@ -144,12 +173,41 @@ def _validate_button(value: object) -> dict[str, Any]:
         "params": params,
         # Button-level one-shot: only this button retires, card stays usable.
         "one_shot": bool(value.get("one_shot", False)),
-        # Button-level ownership overrides the card's when set.
-        "owner_openid": str(value.get("owner_openid") or "").strip(),
+        # Button-level ownership overrides the card's when not "everyone".
+        "owner_mode": _button_owner[0],
+        "owner_openid": _button_owner[1],
         "unsupport_tips": str(
             value.get("unsupport_tips") or "当前 QQ 版本不支持该按钮"
         ).strip()[:80],
     }
+
+
+def bind_initiator(card: dict[str, Any], initiator_openid: str) -> dict[str, Any]:
+    """Resolve ``owner_mode="initiator"`` into a concrete OpenID.
+
+    Raises when the card wants an initiator but none exists -- which is exactly
+    the proactive-push / scheduled / WebUI-test case. Silently downgrading to
+    "everyone" would look locked while being open to the whole group, so this
+    fails loudly instead.
+    """
+    card = copy.deepcopy(card)
+    initiator = str(initiator_openid or "").strip()
+
+    def resolve(node: dict[str, Any], what: str) -> None:
+        if node.get("owner_mode") != "initiator":
+            return
+        if not initiator:
+            raise EphemeralError(
+                f"{what}设置为「仅发起者可用」，但本次发送没有发起者"
+                "（主动推送/定时任务/后台测试发送）。请改为「所有人」或指定 OpenID。"
+            )
+        node["owner_openid"] = initiator
+
+    resolve(card, "卡片")
+    for row in card.get("rows", []):
+        for button in row:
+            resolve(button, f"按钮「{button.get('label', '')}」")
+    return card
 
 
 def build_record(origin: str, card: dict[str, Any], session_id: str) -> dict[str, Any]:
@@ -203,7 +261,12 @@ def resolve_click(
     if button_id in (record.get("used_buttons") or []):
         raise EphemeralError("该按钮已使用", CODE_DUPLICATE)
 
-    owner = str(button.get("owner_openid") or card.get("owner_openid") or "")
+    if button.get("owner_mode", "everyone") != "everyone":
+        owner = str(button.get("owner_openid") or "")
+    else:
+        owner = str(card.get("owner_openid") or "") if card.get(
+            "owner_mode", "everyone"
+        ) != "everyone" else ""
     if owner and member_openid != owner:
         # Someone else's turn: refuse rather than acting on their behalf.
         raise EphemeralError(

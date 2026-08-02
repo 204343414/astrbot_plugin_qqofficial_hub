@@ -30,7 +30,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.9.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.9.1", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -421,6 +421,7 @@ class QQOfficialHubPlugin(Star):
                     await self.send_ephemeral_card(
                         origin, card, client=client,
                         session_id=session_id, event_id=event_id,
+                        initiator_openid=member,
                     )
             except Exception:
                 logger.exception("[QQHub] next_card provider failed: %s", next_card_id)
@@ -447,6 +448,7 @@ class QQOfficialHubPlugin(Star):
         session_id: str = "",
         event_id: str | None = None,
         msg_id: str | None = None,
+        initiator_openid: str = "",
     ) -> str:
         """Send a one-off card. Public API for flow/game plugins.
 
@@ -454,6 +456,8 @@ class QQOfficialHubPlugin(Star):
         :meth:`end_ephemeral_session`.
         """
         validated = ephemeral.validate_card(card)
+        # "仅发起者可用" only has meaning when a click triggered this send.
+        validated = ephemeral.bind_initiator(validated, initiator_openid)
         client = client or self._get_qq_client(origin)
         nonce, session_id = await self.store.issue_ephemeral_card(
             origin, validated, session_id

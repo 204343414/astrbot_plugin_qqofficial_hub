@@ -85,6 +85,7 @@ function render() {
   $("name").value = panel.name; $("markdown").value = panel.markdown;
   $("mention-clicker").checked = Boolean(panel.mention_clicker);
   $("preview-title").textContent = panel.name; renderMarkdown(panel.markdown);
+  syncCardEphemeralUi();
   if (panel.mention_clicker) {
     const mention = document.createElement("div");
     mention.className = "mention-preview";
@@ -129,6 +130,7 @@ function renderForm() {
   const button = selectedButton(), form = $("form"); form.hidden = !button; if (!button) return;
   $("label").value = button.label; $("visited-label").value = button.visited_label; $("style").value = button.style;
   $("action-type").value = button.action_type; $("data").value = button.data; $("permission").value = button.permission;
+  syncButtonEphemeralUi(button);
   $("users").value = (button.specified_users || []).join("\n"); $("users-wrap").hidden = button.permission !== "specified_users";
   $("reply").checked = Boolean(button.reply); $("enter").checked = Boolean(button.enter); $("anchor").checked = button.anchor === 1;
   $("unsupport-tips").value = button.unsupport_tips || "当前 QQ 版本不支持该按钮";
@@ -158,7 +160,45 @@ function editSelected() {
   button.permission = $("permission").value;
   button.specified_users = $("users").value.split("\n").map((item) => item.trim()).filter(Boolean);
   button.reply = $("reply").checked; button.enter = $("enter").checked; button.anchor = $("anchor").checked ? 1 : 0;
-  button.unsupport_tips = $("unsupport-tips").value; render();
+  button.unsupport_tips = $("unsupport-tips").value;
+  button.one_shot = $("btn-one-shot").checked;
+  button.owner_mode = $("btn-owner-mode").value;
+  button.owner_openid = button.owner_mode === OWNER_MODE_NEEDS_OPENID
+    ? $("btn-owner-openid").value.trim() : "";
+  syncButtonEphemeralUi(button);
+  render();
+}
+
+
+const OWNER_MODE_NEEDS_OPENID = "specified";
+
+function syncCardEphemeralUi() {
+  const panel = editablePanel();
+  const mode = panel.owner_mode || "everyone";
+  $("card-one-shot").checked = Boolean(panel.one_shot);
+  $("card-owner-mode").value = mode;
+  $("card-owner-openid").value = panel.owner_openid || "";
+  $("card-owner-tip").value = panel.owner_reject_tip || "";
+  $("card-owner-openid-wrap").hidden = mode !== OWNER_MODE_NEEDS_OPENID;
+  $("card-owner-tip-wrap").hidden = mode === "everyone";
+  const warn = $("card-owner-warn");
+  if (mode === OWNER_MODE_NEEDS_OPENID && !String(panel.owner_openid || "").trim()) {
+    warn.textContent = "⚠️ 指定 OpenID 不能为空，否则没有人能点这张卡片。";
+    warn.hidden = false;
+  } else if (mode === "initiator") {
+    warn.textContent = "ℹ️ 「仅发起者」需要由点击触发。主动推送、定时任务或后台测试发送时没有发起者，发送会被拒绝。";
+    warn.hidden = false;
+  } else {
+    warn.hidden = true;
+  }
+}
+
+function syncButtonEphemeralUi(button) {
+  const mode = button.owner_mode || "everyone";
+  $("btn-one-shot").checked = Boolean(button.one_shot);
+  $("btn-owner-mode").value = mode;
+  $("btn-owner-openid").value = button.owner_openid || "";
+  $("btn-owner-openid-wrap").hidden = mode !== OWNER_MODE_NEEDS_OPENID;
 }
 
 function renderSnippetLibrary() {
@@ -242,6 +282,19 @@ function insertMarkdownSnippet(snippet) {
 }
 ["name", "markdown"].forEach((id) => $(id).addEventListener("input", () => { const panel = editablePanel(); panel[id] = $(id).value; render(); }));
 $("mention-clicker").addEventListener("input", () => { editablePanel().mention_clicker = $("mention-clicker").checked; render(); });
+$("card-one-shot").addEventListener("input", () => { editablePanel().one_shot = $("card-one-shot").checked; syncCardEphemeralUi(); });
+$("card-owner-mode").addEventListener("input", () => {
+  const panel = editablePanel();
+  panel.owner_mode = $("card-owner-mode").value;
+  if (panel.owner_mode !== OWNER_MODE_NEEDS_OPENID) panel.owner_openid = "";
+  syncCardEphemeralUi();
+});
+["card-owner-openid", "card-owner-tip"].forEach((id) => $(id).addEventListener("input", () => {
+  const panel = editablePanel();
+  panel.owner_openid = $("card-owner-openid").value.trim();
+  panel.owner_reject_tip = $("card-owner-tip").value.trim();
+  syncCardEphemeralUi();
+}));
 $("insert-link").onclick = () => insertMarkdownSnippet("[🔗链接文字](https://example.com)");
 $("insert-image").onclick = () => {
   const url = safeUrl($("image-url").value.trim());
@@ -284,7 +337,7 @@ $("markdown-apply").onclick = () => {
 };
 $("markdown-modal").addEventListener("click", (event) => { if (event.target === $("markdown-modal")) closeMarkdownEditor(); });
 window.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("markdown-modal").hidden) closeMarkdownEditor(); });
-["label", "visited-label", "style", "action-type", "data", "permission", "users", "reply", "enter", "anchor", "unsupport-tips"].forEach((id) => $(id).addEventListener("input", editSelected));
+["label", "visited-label", "style", "action-type", "data", "permission", "users", "reply", "enter", "anchor", "unsupport-tips", "btn-one-shot", "btn-owner-mode", "btn-owner-openid"].forEach((id) => $(id).addEventListener("input", editSelected));
 $("action-preset").addEventListener("change", () => {
   const button = selectedButton(); if (!button || !$("action-preset").value) return;
   button.data = $("action-preset").value;

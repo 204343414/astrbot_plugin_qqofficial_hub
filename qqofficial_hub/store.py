@@ -306,11 +306,24 @@ def validate_panel(value: object) -> dict[str, Any]:
     button_ids = [button["id"] for row in normalized_rows for button in row]
     if len(button_ids) != len(set(button_ids)):
         raise ValueError("同一张卡片内的按钮 ID 必须唯一")
+    from . import ephemeral
+    owner_mode = str(value.get("owner_mode") or "everyone").strip()
+    if owner_mode not in ephemeral.OWNER_MODES:
+        raise ValueError("卡片归属模式无效")
+    owner_openid = str(value.get("owner_openid") or "").strip()
+    if owner_mode == "specified" and not owner_openid:
+        raise ValueError("卡片选择了「指定 OpenID」，OpenID 不能为空")
+    if owner_mode != "specified":
+        owner_openid = ""
     return {
         "id": PANEL_ID,
         "name": name,
         "markdown": markdown,
         "mention_clicker": bool(value.get("mention_clicker", False)),
+        "one_shot": bool(value.get("one_shot", False)),
+        "owner_mode": owner_mode,
+        "owner_openid": owner_openid,
+        "owner_reject_tip": str(value.get("owner_reject_tip") or "").strip()[:80],
         "rows": normalized_rows,
     }
 
@@ -364,6 +377,15 @@ def _validate_button(value: object) -> dict[str, Any]:
     button_id = str(value.get("id") or "").strip() or f"button-{label}"
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", button_id):
         raise ValueError("按钮 ID 只能包含字母、数字、点、下划线、冒号、横线，最长80")
+    from . import ephemeral
+    btn_owner_mode = str(value.get("owner_mode") or "everyone").strip()
+    if btn_owner_mode not in ephemeral.OWNER_MODES:
+        raise ValueError("按钮归属模式无效")
+    btn_owner_openid = str(value.get("owner_openid") or "").strip()
+    if btn_owner_mode == "specified" and not btn_owner_openid:
+        raise ValueError(f"按钮「{label}」选择了「指定 OpenID」，OpenID 不能为空")
+    if btn_owner_mode != "specified":
+        btn_owner_openid = ""
     return {
         "id": button_id,
         "label": label,
@@ -374,6 +396,9 @@ def _validate_button(value: object) -> dict[str, Any]:
         "permission": permission,
         "specified_users": users,
         "action_params": action_params,
+        "one_shot": bool(value.get("one_shot", False)),
+        "owner_mode": btn_owner_mode,
+        "owner_openid": btn_owner_openid,
         "reply": reply,
         "enter": enter,
         "anchor": anchor,

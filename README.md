@@ -69,8 +69,10 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 ## 一次性卡片（流程 / 游戏）
 
 除「每群一张、改版即失效」的配置面板外，Hub 还提供**一次性卡片**：由其他插件
-用代码生成，支持 `one_shot`（点一次即失效）、`owner_openid`（绑定点击者）、
+用代码生成，支持 `one_shot`（点一次即失效）、`owner_mode`（所有人／仅发起者／指定 OpenID）、
 `next_card`（静态跳转，可表达分支与循环）、`session_id`（整局回收）。
+
+卡片编辑器右侧「一次性卡片」与按钮的「一次性设置」可直接勾选这些开关。
 
 游戏请写成独立插件，通过 `hub.actions.register(...)` 与
 `hub.send_ephemeral_card(...)` 接入，Hub 只提供机制。
