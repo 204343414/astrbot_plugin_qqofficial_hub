@@ -11,7 +11,21 @@ from astrbot.api.message_components import At, Plain
 from astrbot.api.platform import AstrBotMessage, MessageMember, MessageType
 
 
+def passive_event_id(interaction: Any) -> str:
+    """Return the id QQ accepts as ``event_id`` for a passive reply.
+
+    botpy builds Interaction as ``Interaction(api, payload["id"], payload["d"])``
+    where the *envelope* ``id`` becomes ``.event_id`` and ``d["id"]`` becomes
+    ``.id``. Only ``.event_id`` is the platform event id usable for passive
+    messages; ``.id`` is the interaction_id used to ACK
+    ``PUT /interactions/{interaction_id}``. Passing ``.id`` as event_id makes QQ
+    reject the send with "请求参数event_id无效".
+    """
+    return str(getattr(interaction, "event_id", "") or "").strip()
+
+
 class HubSyntheticCommandEvent(AstrMessageEvent):
+
     """QQ group event whose replies are sent proactively, without fake msg_id."""
 
     def __init__(
@@ -45,7 +59,7 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         # (docs: send.html, event_id supports "INTERACTION_CREATE"). Using it
         # keeps button replies passive: no proactive-push permission needed and
         # no monthly 4-message proactive quota consumed.
-        self._event_id = str(getattr(interaction, "id", "") or "")
+        self._event_id = passive_event_id(interaction)
         self._event_id_used = False
         self.set_extra("qqhub_synthetic_command", True)
 

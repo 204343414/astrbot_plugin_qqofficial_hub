@@ -19,14 +19,17 @@ from .qqofficial_hub.action_registry import (
     get_action_registry,
 )
 from .qqofficial_hub.command_catalog import build_command_catalog
-from .qqofficial_hub.command_dispatch import dispatch_registered_command
+from .qqofficial_hub.command_dispatch import (
+    dispatch_registered_command,
+    passive_event_id,
+)
 from .qqofficial_hub.store import PanelStore
 from .web import HubWebController
 
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.3.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.3.1", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -396,7 +399,7 @@ class QQOfficialHubPlugin(Star):
             self._send_configured_panel(
                 context.origin,
                 client=context.client,
-                event_id=str(getattr(context.interaction, "id", "") or "") or None,
+                event_id=passive_event_id(context.interaction) or None,
                 mention_openid=context.member_openid,
             )
         )

@@ -62,3 +62,21 @@ and tested against the actual installed Adapter and `qq-botpy==1.2.1`.
    失败/缺失/已用尽时回退 `send_by_session` 主动推送。
 
 `event_id` 每个事件只用一次（`_event_id_used`），避免同一事件重复下发被 QQ 拒绝。
+
+
+### 陷阱：`interaction.id` 不是 `event_id`
+
+botpy 的构造是 `Interaction(api, payload["id"], payload["d"])`：
+
+| 属性 | 来源 | 用途 |
+| --- | --- | --- |
+| `interaction.event_id` | WS 信封的 `payload["id"]` | **被动消息的 `event_id`** |
+| `interaction.id` | 事件体 `d["id"]` | `PUT /interactions/{interaction_id}` 的 ACK 目标 |
+
+两者都叫 "id" 但**不可互换**。把 `.id` 当 `event_id` 传，QQ 会返回：
+
+```
+botpy.errors.ServerError: 请求参数event_id无效
+```
+
+统一走 `qqofficial_hub.command_dispatch.passive_event_id()` 读取，ACK 仍用 `.id`。

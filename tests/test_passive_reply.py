@@ -89,7 +89,7 @@ from astrbot.api.message_components import Plain  # noqa: E402
 from qqofficial_hub.command_dispatch import HubSyntheticCommandEvent  # noqa: E402
 
 
-def _build(interaction_id="EVT-1", group="G1"):
+def _build(event_id="EVT-1", group="G1", interaction_id="INTERACTION-9"):
     sent = []
     proactive = []
 
@@ -104,8 +104,9 @@ def _build(interaction_id="EVT-1", group="G1"):
         meta=lambda: SimpleNamespace(id="qq_official"),
         send_by_session=send_by_session,
     )
-    interaction = SimpleNamespace(id=interaction_id, group_openid=group,
-                                  group_member_openid="M1")
+    # Mirror botpy: envelope id -> .event_id, payload d["id"] -> .id
+    interaction = SimpleNamespace(id=interaction_id, event_id=event_id,
+                                  group_openid=group, group_member_openid="M1")
     event = HubSyntheticCommandEvent("/新闻", adapter, client, interaction)
     return event, sent, proactive
 
@@ -115,7 +116,8 @@ def test_reply_uses_event_id_and_avoids_proactive_push():
         event, sent, proactive = _build()
         await event.send(MessageChain(chain=[Plain("头条来了")]))
         assert len(sent) == 1, "should send exactly one passive message"
-        assert sent[0]["event_id"] == "EVT-1"
+        assert sent[0]["event_id"] == "EVT-1", "must use .event_id, not .id"
+        assert sent[0]["event_id"] != "INTERACTION-9"
         assert "msg_id" not in sent[0]
         assert sent[0]["content"] == "头条来了"
         assert sent[0]["group_openid"] == "G1"
@@ -149,7 +151,7 @@ def test_falls_back_to_proactive_when_qq_rejects_event_id():
 
 def test_missing_event_id_uses_proactive_path():
     async def scenario():
-        event, sent, proactive = _build(interaction_id="")
+        event, sent, proactive = _build(event_id="")
         await event.send(MessageChain(chain=[Plain("hi")]))
         assert sent == []
         assert len(proactive) == 1
@@ -164,3 +166,18 @@ def test_empty_text_does_not_consume_event_id():
         assert len(proactive) == 1
         assert event._event_id_used is False
     asyncio.run(scenario())
+
+
+def test_passive_event_id_reads_event_id_not_interaction_id():
+    """botpy: Interaction(api, payload["id"], payload["d"]).
+
+    ``.id`` is the interaction_id for PUT /interactions/{id} (ACK);
+    ``.event_id`` is the platform event id valid for passive replies.
+    Using ``.id`` yields QQ error "请求参数event_id无效".
+    """
+    from qqofficial_hub.command_dispatch import passive_event_id
+    both = SimpleNamespace(id="INTERACTION-9", event_id="EVT-1")
+    assert passive_event_id(both) == "EVT-1"
+    assert passive_event_id(SimpleNamespace(id="INTERACTION-9")) == ""
+    assert passive_event_id(SimpleNamespace(id="X", event_id=None)) == ""
+    assert passive_event_id(SimpleNamespace(id="X", event_id="  E  ")) == "E"
