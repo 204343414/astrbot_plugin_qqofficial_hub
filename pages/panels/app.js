@@ -377,3 +377,111 @@ $("save").onclick = save;
 $("send-test").onclick = () => sendTest("configured");
 $("send-test-ephemeral").onclick = () => sendTest("ephemeral");
 load().catch((error) => setNotice(`加载失败：${error.message}`, true));
+
+
+// --- 运行诊断（只读抽屉）---------------------------------------------------
+// AstrBot 侧边栏只为每个插件显示第一个页面（usePluginSidebarItems 取 pages[0]），
+// 所以诊断不能独立成页，否则没有入口。做成编辑器内的抽屉即可随时打开。
+function diagEl(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  Object.assign(node, props);
+  for (const child of children.flat()) {
+    if (child == null) continue;
+    node.append(child.nodeType ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+function diagTable(headers, rows) {
+  return diagEl("table", { className: "diag-table" },
+    diagEl("thead", {}, diagEl("tr", {}, ...headers.map((h) => diagEl("th", {}, h)))),
+    diagEl("tbody", {}, ...rows.map((cells) => diagEl("tr", {}, ...cells.map((c) => diagEl("td", {}, c))))));
+}
+
+function diagMark(ok, okText = "正常", badText = "缺失") {
+  return diagEl("span", { className: ok ? "diag-ok" : "diag-bad" }, ok ? `✓ ${okText}` : `✗ ${badText}`);
+}
+
+function renderDiagnostics(report) {
+  const host = $("diag-body");
+  host.innerHTML = "";
+  const storage = report.storage || {};
+  const actions = report.actions || {};
+  const external = (actions.owners || []).filter((o) => o.external);
+
+  const stats = diagEl("div", { className: "diag-stats" });
+  const pairs = [
+    [report.healthy ? "✓" : "✗", report.healthy ? "整体健康" : "存在异常"],
+    [`${(report.modules || []).filter((m) => m.ok).length}/${(report.modules || []).length}`, "模块加载"],
+    [actions.total ?? 0, "已注册 Action"],
+    [external.length, "外部插件接入"],
+    [(report.providers || []).length, "卡片提供者"],
+    [storage.ephemeral_cards_live ?? 0, "存活一次性卡片"],
+    [storage.ephemeral_sessions_live ?? 0, "进行中会话"],
+  ];
+  for (const [value, label] of pairs) {
+    stats.append(diagEl("div", { className: "diag-stat" },
+      diagEl("b", {}, value), diagEl("span", {}, label)));
+  }
+  host.append(stats);
+
+  host.append(diagEl("h3", {}, "已注册 Action"));
+  host.append(diagEl("p", { className: "hint" },
+    "外部插件出现在这里即代表与 Hub 握手成功；卸载后刷新即消失。"));
+  const owners = actions.owners || [];
+  if (actions.error) host.append(diagEl("p", { className: "diag-bad" }, actions.error));
+  else if (!owners.length) host.append(diagEl("p", { className: "hint" }, "暂无注册"));
+  else for (const group of owners) {
+    host.append(diagEl("div", { className: "diag-owner" },
+      diagEl("h4", {}, diagEl("code", {}, group.owner),
+        diagEl("span", { className: `diag-tag ${group.external ? "ext" : "own"}` },
+          group.external ? "外部插件" : "Hub 自带")),
+      diagTable(["Action ID", "标题", "权限"],
+        group.actions.map((a) => [diagEl("code", {}, a.id), a.title, a.permission || "-"]))));
+  }
+
+  host.append(diagEl("h3", {}, "卡片提供者（next_card）"));
+  const providers = report.providers || [];
+  host.append(providers.length
+    ? diagTable(["card_id", "归属", "回调"],
+        providers.map((p) => [diagEl("code", {}, p.card_id),
+          p.external ? "外部" : "Hub", diagEl("code", {}, p.callback)]))
+    : diagEl("p", { className: "hint" }, "暂无注册"));
+
+  const bridge = report.bridge || {};
+  host.append(diagEl("h3", {}, "Interaction 兼容桥"));
+  host.append(bridge.error
+    ? diagEl("p", { className: "diag-bad" }, bridge.error)
+    : diagTable(["项目", "值"], [
+        ["配置开关", diagMark(bridge.enabled, "已开启", "未开启")],
+        ["已安装", diagMark(bridge.installed, "已安装", "未安装")],
+        ["回调存活", diagMark(bridge.callback_alive, "存活", "已失效")],
+        ["处理的类型", (bridge.handled_types || []).join(", ")],
+      ]));
+
+  host.append(diagEl("h3", {}, "模块与 API"));
+  host.append(diagTable(["模块", "状态"],
+    (report.modules || []).map((m) => [diagEl("code", {}, m.name),
+      m.ok ? diagMark(true, "已加载") : diagEl("span", { className: "diag-bad" }, m.error)])));
+  host.append(diagTable(["对外接口", "状态"],
+    (report.api || []).map((a) => [diagEl("code", {}, a.name), diagMark(a.present)])));
+}
+
+async function loadDiagnostics() {
+  const button = $("diag-refresh");
+  button.disabled = true;
+  try {
+    renderDiagnostics(await bridge.apiGet("diagnostics"));
+  } catch (error) {
+    $("diag-body").textContent = error.message || "读取诊断信息失败";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$("open-diagnostics").onclick = () => { $("diag-modal").hidden = false; loadDiagnostics(); };
+$("diag-close").onclick = () => { $("diag-modal").hidden = true; };
+$("diag-refresh").onclick = loadDiagnostics;
+$("diag-modal").addEventListener("click", (event) => {
+  if (event.target === $("diag-modal")) $("diag-modal").hidden = true;
+});

@@ -5,9 +5,6 @@
   "pages": {
     "panels": {
       "title": "卡片编辑器"
-    },
-    "zz-diagnostics": {
-      "title": "运行诊断（只读）"
     }
   }
 }

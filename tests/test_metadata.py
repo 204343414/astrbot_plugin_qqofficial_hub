@@ -47,18 +47,23 @@ def test_support_platforms_uses_valid_adapter_ids():
     assert "qq_official" in platforms
 
 
-def test_editor_page_sorts_before_diagnostics():
-    """AstrBot lists plugin pages by directory name, case-insensitively.
-
-    The editor must come first so opening the plugin lands on something
-    editable; a read-only diagnostics page as the default made the whole
-    plugin look broken.
+def test_plugin_exposes_exactly_one_page():
+    """AstrBot's sidebar only links a plugin's *first* page
+    (usePluginSidebarItems uses ``p.pages[0]``), so a second page would have no
+    entry point at all. Diagnostics therefore lives inside the editor.
     """
     pages_root = Path(__file__).parents[1] / "pages"
-    names = sorted(
-        (p.name for p in pages_root.iterdir() if p.is_dir()), key=str.lower
-    )
-    assert names[0] == "panels", f"首个页面应为编辑器，实际为 {names[0]}"
+    names = [p.name for p in pages_root.iterdir() if p.is_dir()]
+    assert names == ["panels"], f"侧边栏只会链接第一个页面，多余页面无入口: {names}"
+
+
+def test_editor_hosts_the_diagnostics_drawer():
+    root = Path(__file__).parents[1] / "pages" / "panels"
+    html = (root / "index.html").read_text(encoding="utf-8")
+    js = (root / "app.js").read_text(encoding="utf-8")
+    assert 'id="open-diagnostics"' in html, "编辑器需有运行诊断入口"
+    assert 'id="diag-modal"' in html
+    assert "loadDiagnostics" in js
 
 
 def test_every_page_has_a_localised_title():
