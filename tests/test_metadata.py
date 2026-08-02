@@ -45,3 +45,35 @@ def test_support_platforms_uses_valid_adapter_ids():
     for item in platforms:
         assert item in known, item
     assert "qq_official" in platforms
+
+
+def test_editor_page_sorts_before_diagnostics():
+    """AstrBot lists plugin pages by directory name, case-insensitively.
+
+    The editor must come first so opening the plugin lands on something
+    editable; a read-only diagnostics page as the default made the whole
+    plugin look broken.
+    """
+    pages_root = Path(__file__).parents[1] / "pages"
+    names = sorted(
+        (p.name for p in pages_root.iterdir() if p.is_dir()), key=str.lower
+    )
+    assert names[0] == "panels", f"首个页面应为编辑器，实际为 {names[0]}"
+
+
+def test_every_page_has_a_localised_title():
+    """Without i18n the tab shows the raw directory name, e.g. 'zz-diagnostics'."""
+    import json
+    root = Path(__file__).parents[1]
+    pages = {p.name for p in (root / "pages").iterdir() if p.is_dir()}
+    for locale_file in (root / ".astrbot-plugin" / "i18n").glob("*.json"):
+        data = json.loads(locale_file.read_text(encoding="utf-8"))
+        titled = set(data.get("pages", {}))
+        assert pages <= titled, f"{locale_file.name} 缺少标题: {pages - titled}"
+
+
+def test_every_page_has_an_entry_file():
+    """A page directory without index.html is silently skipped by AstrBot."""
+    pages_root = Path(__file__).parents[1] / "pages"
+    for page in (p for p in pages_root.iterdir() if p.is_dir()):
+        assert (page / "index.html").is_file(), f"{page.name} 缺少 index.html"

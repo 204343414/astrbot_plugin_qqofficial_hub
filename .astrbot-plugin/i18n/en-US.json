@@ -1,0 +1,13 @@
+{
+  "metadata": {
+    "display_name": "QQ Official Hub"
+  },
+  "pages": {
+    "panels": {
+      "title": "Card Editor"
+    },
+    "zz-diagnostics": {
+      "title": "Diagnostics (read-only)"
+    }
+  }
+}
