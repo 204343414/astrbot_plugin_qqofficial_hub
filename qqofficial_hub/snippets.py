@@ -12,6 +12,10 @@ Adding a new dynamic token means:
 1. append a :class:`Snippet` here (so the editor lists it automatically);
 2. resolve its placeholder at send time (see ``main._render_dynamic_markdown``).
 
+Only add a dynamic token when its value can actually be known at send time.
+A previous proactive-push lamp was removed precisely because QQ offers no way
+to query the current setting, leaving it permanently "unknown".
+
 Keeping the catalog server-side means new blueprint tokens show up in the UI
 without shipping new front-end code.
 """
@@ -35,30 +39,6 @@ class Snippet:
 
 
 SNIPPETS: tuple[Snippet, ...] = (
-    Snippet(
-        id="push_lamp",
-        label="🟢 推送状态指示灯",
-        snippet="{{push_lamp}}",
-        hint="发送时替换为 🟢/🔴/⚪，表示本群主动消息推送是否开启。",
-        group="状态占位符",
-        dynamic=True,
-    ),
-    Snippet(
-        id="push_status",
-        label="推送状态说明文字",
-        snippet="{{push_status}}",
-        hint="发送时替换为「当前群未开启主动消息推送功能」等说明。",
-        group="状态占位符",
-        dynamic=True,
-    ),
-    Snippet(
-        id="push_line",
-        label="推送状态整行",
-        snippet="{{push_lamp}} {{push_status}}",
-        hint="指示灯 + 说明文字，适合放在卡片底部作为状态栏。",
-        group="状态占位符",
-        dynamic=True,
-    ),
     Snippet(
         id="group_name",
         label="当前群标识",

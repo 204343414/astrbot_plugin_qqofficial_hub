@@ -60,7 +60,6 @@ class PanelStore:
             "observed_groups": {},
             "issued_test_cards": {},
             "authorizations": {},
-            "push_states": {},
         }
 
     def _load(self) -> dict[str, Any]:
@@ -222,51 +221,6 @@ class PanelStore:
         async with self._lock:
             item = self._data.get("authorizations", {}).get(f"{platform_id}:{target}")
             return copy.deepcopy(item) if isinstance(item, dict) else None
-
-    async def set_push_state(self, origin: str, state: str, source: str) -> bool:
-        """Record proactive-push state for a group origin.
-
-        ``source`` is kept for auditing and precedence: an ``authorize`` event
-        is authoritative, ``send`` is inferred from a real send result, and
-        ``adapter`` is the weakest signal. Returns True when the stored value
-        actually changed.
-        """
-        import time
-        from . import push_probe
-        if not self._valid_group_origin(origin):
-            return False
-        if str(source) in push_probe.DISTRUSTED_SOURCES:
-            return False
-        async with self._lock:
-            table = self._data.setdefault("push_states", {})
-            prior = table.get(origin) if isinstance(table.get(origin), dict) else {}
-            if not push_probe.should_replace(
-                str(prior.get("state") or "unknown"),
-                str(prior.get("source") or ""),
-                str(state),
-                str(source),
-            ):
-                return False
-            changed = str(prior.get("state") or "unknown") != str(state)
-            table[origin] = {
-                "state": str(state),
-                "source": str(source),
-                "updated_at": int(time.time()),
-            }
-            self._write_atomic(self._data)
-            return changed
-
-    async def get_push_state(self, origin: str) -> str:
-        from . import push_probe
-        async with self._lock:
-            item = self._data.get("push_states", {}).get(origin)
-            if not isinstance(item, dict):
-                return "unknown"
-            # Values written by a since-retracted heuristic must not be trusted;
-            # a wrong "granted" is worse than admitting we do not know.
-            if str(item.get("source") or "") in push_probe.DISTRUSTED_SOURCES:
-                return "unknown"
-            return str(item.get("state") or "unknown")
 
     def _valid_group_origin(self, origin: str) -> bool:
         parts = origin.split(":", 2)

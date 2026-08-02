@@ -1,5 +1,4 @@
 """Snippet catalog: opt-in templates for the card editor."""
-from qqofficial_hub import push_status as ps
 from qqofficial_hub.snippets import SNIPPETS, catalog
 from qqofficial_hub.store import _validate_markdown, empty_panel
 
@@ -23,16 +22,16 @@ def test_every_snippet_passes_markdown_validation():
         _validate_markdown(f"# t\n{item.snippet}")
 
 
-def test_dynamic_snippets_are_flagged_and_resolvable():
-    dynamic = [i for i in SNIPPETS if i.dynamic]
-    assert dynamic, "expected at least the push-status tokens"
-    for item in dynamic:
-        assert "{{" in item.snippet
-    # every push token the catalog offers must be understood by the renderer
-    for item in dynamic:
-        if "push" in item.id:
-            rendered = ps.render(item.snippet, ps.REVOKED)
-            assert "{{" not in rendered, f"{item.id} left an unresolved token"
+def test_dynamic_snippets_are_flagged():
+    for item in SNIPPETS:
+        assert item.dynamic == ("{{" in item.snippet), item.id
+
+
+def test_no_push_status_tokens_remain():
+    """The proactive-push lamp was removed: QQ cannot report the setting."""
+    for item in SNIPPETS:
+        assert "push" not in item.id
+        assert "push" not in item.snippet
 
 
 def test_static_snippets_have_no_placeholder():

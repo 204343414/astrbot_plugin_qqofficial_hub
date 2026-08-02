@@ -58,8 +58,6 @@ function renderInline(target, text) {
   target.append(document.createTextNode(text.slice(cursor)));
 }
 const PREVIEW_TOKENS = {
-  "{{push_lamp}}": "🔴",
-  "{{push_status}}": "当前群未开启主动消息推送功能",
   "{{group_openid_short}}": "1A2B3C4D",
 };
 function previewTokens(text) {

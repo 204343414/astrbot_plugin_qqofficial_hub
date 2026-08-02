@@ -22,7 +22,6 @@ from .qqofficial_hub.command_dispatch import (
     dispatch_registered_command,
     passive_event_id,
 )
-from .qqofficial_hub import push_probe, push_status
 from .qqofficial_hub.passive_reply import next_msg_seq
 from .qqofficial_hub.store import PanelStore
 from .web import HubWebController
@@ -30,23 +29,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-def _authorize_flag(authorize: object):
-    """Best-effort read of an authorize event's boolean, if it carries one.
-
-    The documented payload lists only opt_scene/scope, so real events may or
-    may not include an explicit flag. Return None when absent and let the
-    caller treat the event itself as a grant.
-    """
-    for key in ("authorized", "status", "is_authorized", "enable", "enabled"):
-        if isinstance(authorize, dict):
-            if key in authorize:
-                return authorize[key]
-        elif hasattr(authorize, key):
-            return getattr(authorize, key)
-    return None
-
-
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.6.2", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.7.0", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -84,17 +67,6 @@ class QQOfficialHubPlugin(Star):
         self.web.register_routes()
         self.experimental_bridge = bool(config.get("experimental_interaction_bridge", False))
         self.empty_mention_opens_panel = bool(config.get("empty_mention_opens_panel", True))
-        push_cfg = config.get("push_status_display", {}) or {}
-        self.push_lamps = {
-            push_status.GRANTED: str(push_cfg.get("lamp_granted", "") or "").strip(),
-            push_status.REVOKED: str(push_cfg.get("lamp_revoked", "") or "").strip(),
-            push_status.UNKNOWN: str(push_cfg.get("lamp_unknown", "") or "").strip(),
-        }
-        self.push_templates = {
-            push_status.GRANTED: str(push_cfg.get("text_granted", "") or "").strip(),
-            push_status.REVOKED: str(push_cfg.get("text_revoked", "") or "").strip(),
-            push_status.UNKNOWN: str(push_cfg.get("text_unknown", "") or "").strip(),
-        }
         self.bridge_generation: int | None = None
         if self.experimental_bridge:
             self.bridge_generation = interaction_bridge.install(PLUGIN_NAME, self._handle_interaction)
@@ -288,7 +260,6 @@ class QQOfficialHubPlugin(Star):
                         if context.mention_clicker
                         else ""
                     ),
-                    push_reporter=self._push_reporter,
                 )
                 return 0
 
@@ -385,39 +356,6 @@ class QQOfficialHubPlugin(Star):
             },
         }
 
-    def _push_reporter(self, group_openid: str, source: str, error: Exception | None) -> None:
-        """Sync entry point used by synthetic events to report send outcomes."""
-        origin = f"{self._platform_id_of(None)}:GroupMessage:{group_openid}"
-        asyncio.create_task(self.report_push_result(origin, error, source=source))
-
-    async def report_push_result(
-        self, origin: str, error: Exception | None = None, *, source: str = "send"
-    ) -> str:
-        """Record the outcome of a proactive send. Public API for other plugins.
-
-        Any plugin that attempts a proactive group message can call this so the
-        Hub lamp reflects reality instead of waiting for an authorize event
-        that may never arrive::
-
-            hub = context.get_registered_star("astrbot_plugin_qqofficial_hub")
-            await hub.star_cls_obj.report_push_result(origin, exc)
-
-        Passing ``error=None`` means the send succeeded.
-        """
-        state = (
-            push_status.GRANTED if error is None
-            else push_probe.classify_send_error(error)
-        )
-        if state == push_status.UNKNOWN:
-            return state
-        changed = await self.store.set_push_state(origin, state, source)
-        if changed:
-            logger.info(
-                "[QQHub] Push state for %s -> %s (source=%s)",
-                origin.split(":", 2)[-1][-8:], state, source,
-            )
-        return state
-
     async def _render_dynamic_markdown(self, markdown: str, origin: str) -> str:
         """Resolve editor-inserted placeholders just before sending.
 
@@ -426,13 +364,6 @@ class QQOfficialHubPlugin(Star):
         """
         if "{{" not in markdown:
             return markdown
-        if push_status.has_placeholder(markdown):
-            markdown = push_status.render(
-                markdown,
-                await self.store.get_push_state(origin),
-                lamps=self.push_lamps,
-                templates=self.push_templates,
-            )
         if "{{group_openid_short}}" in markdown:
             markdown = markdown.replace(
                 "{{group_openid_short}}", origin.split(":", 2)[-1][-8:]
@@ -467,18 +398,7 @@ class QQOfficialHubPlugin(Star):
             payload["msg_id"] = msg_id
         elif event_id:
             payload["event_id"] = event_id
-        proactive = not msg_id and not event_id
-        try:
-            await client.api.post_group_message(**payload)
-        except Exception as exc:
-            # Only a *proactive* send tells us anything, and only when the error
-            # actually names a push restriction; audits and rate limits must not
-            # mislabel a healthy group.
-            if proactive:
-                await self.report_push_result(origin, exc)
-            raise
-        if proactive:
-            await self.report_push_result(origin, None)
+        await client.api.post_group_message(**payload)
         logger.info("[QQHub] Configured panel sent to %s revision=%s", origin, panel.get("revision"))
 
     async def _action_refresh(
@@ -549,20 +469,11 @@ class QQOfficialHubPlugin(Star):
             )
         except Exception as exc:
             logger.warning("[QQHub] Cannot persist authorization: %s", exc)
-        state = push_status.state_from_authorize_event(
-            scope,
-            _authorize_flag(authorize),
-            is_group=bool(group_openid),
-        )
-        if state and group_openid:
-            origin = f"{self._platform_id_of(None)}:GroupMessage:{group_openid}"
-            await self.store.set_push_state(origin, state, "authorize")
         logger.info(
-            "[QQHub] Authorize event scope=%s scene=%s group=%s user=%s state=%s",
+            "[QQHub] Authorize event scope=%s scene=%s group=%s user=%s",
             scope or "?", opt_scene or "?",
             group_openid[-8:] if group_openid else "-",
             user_openid[-8:] if user_openid else "-",
-            state or "n/a",
         )
         return 0
 

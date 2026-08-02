@@ -65,7 +65,6 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         # no monthly 4-message proactive quota consumed.
         self._event_id = passive_event_id(interaction)
         self._replies_used = 0
-        self._push_reporter = None
         self.set_extra("qqhub_synthetic_command", True)
 
     async def send(self, message: MessageChain) -> None:
@@ -90,47 +89,9 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         await super().send(message)
         if await self._send_as_passive_reply(message):
             return
-        # Falling through means we are about to attempt a *proactive* push.
-        # Its outcome is the most common real-world evidence of whether this
-        # group has proactive messages enabled, so report it to the Hub.
-        try:
-            await self._adapter.send_by_session(self.session, message)
-        except Exception as exc:
-            self._report_push_evidence("send", exc)
-            raise
-        # AstrBot's qq_official adapter silently returns (warning only, no
-        # exception) when a proactive group send is refused, so "no exception"
-        # does NOT prove delivery. Detect the skip by checking whether the
-        # adapter had a usable msg_id / proactive allowance for this session.
-        if self._proactive_send_was_skipped():
-            self._report_push_evidence(
-                "send", RuntimeError("skip send_by_session: 群未开启主动消息")
-            )
-
-    def _proactive_send_was_skipped(self) -> bool:
-        """True when the adapter could not have delivered a proactive message.
-
-        Mirrors the adapter's own guard: without a cached msg_id the send is
-        skipped for group sessions. We deliberately do not consult
-        ``_allow_group_proactive_send`` — it is a hard-coded ``True`` and says
-        nothing about the group's real setting.
-        """
-        try:
-            cache = getattr(self._adapter, "_session_last_message_id", None)
-            if not isinstance(cache, dict):
-                return False
-            return not cache.get(self.session.session_id)
-        except Exception:  # pragma: no cover - never break a send over telemetry
-            return False
-
-    def _report_push_evidence(self, source: str, error: Exception | None) -> None:
-        reporter = getattr(self, "_push_reporter", None)
-        if reporter is None or not self._group_openid:
-            return
-        try:
-            reporter(self._group_openid, source, error)
-        except Exception:  # pragma: no cover - never break a send over telemetry
-            logger.debug("[QQHub] push evidence reporting failed", exc_info=True)
+        # No event_id budget left: fall back to a proactive push, which needs
+        # the group to have proactive messages enabled.
+        await self._adapter.send_by_session(self.session, message)
 
     async def _send_as_passive_reply(self, message: MessageChain) -> bool:
         """Reply using INTERACTION_CREATE's event_id instead of a proactive push.
@@ -186,7 +147,6 @@ def dispatch_registered_command(
     interaction: Any,
     command: str,
     mention_openid: str = "",
-    push_reporter: Any = None,
 ) -> None:
     adapter = getattr(client, "platform", None)
     if adapter is None:
@@ -198,5 +158,4 @@ def dispatch_registered_command(
         interaction,
         mention_openid=mention_openid,
     )
-    event._push_reporter = push_reporter
     adapter.commit_event(event)

@@ -22,42 +22,5 @@
     "hint": "用于 permission=operator 的按钮后端校验；多个用逗号、空格或换行分隔。",
     "type": "text",
     "default": ""
-  },
-  "push_status_display": {
-    "description": "主动消息推送状态指示灯",
-    "type": "object",
-    "hint": "在卡片 Markdown 中使用占位符 {{push_lamp}}（指示灯）与 {{push_status}}（说明文字）。留空则用默认值。状态来自 QQ 授权事件，以及主动推送的实际成败推断；从未收到过任何信号时显示“未知”，不会误报为未开启。",
-    "items": {
-      "lamp_granted": {
-        "description": "已开启 指示灯",
-        "type": "string",
-        "default": "🟢"
-      },
-      "lamp_revoked": {
-        "description": "未开启 指示灯",
-        "type": "string",
-        "default": "🔴"
-      },
-      "lamp_unknown": {
-        "description": "未知 指示灯",
-        "type": "string",
-        "default": "⚪"
-      },
-      "text_granted": {
-        "description": "已开启 说明文字",
-        "type": "string",
-        "default": "当前群已开启主动消息推送功能"
-      },
-      "text_revoked": {
-        "description": "未开启 说明文字",
-        "type": "string",
-        "default": "当前群未开启主动消息推送功能"
-      },
-      "text_unknown": {
-        "description": "未知 说明文字",
-        "type": "string",
-        "default": "当前群主动消息推送状态未知"
-      }
-    }
   }
 }
