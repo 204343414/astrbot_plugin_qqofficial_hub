@@ -258,3 +258,19 @@ Interaction(self.api, payload.get('id'), payload.get('d', {}))
 - 文本交互（text-chain）https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/trans/text-chain.html
 - 事件订阅 Intents https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html
 - 群管理事件 https://bot.q.qq.com/wiki/develop/api-v2/server-inter/group/manage/event.html
+
+
+## 11. 插件平台声明与隔离（AstrBot v4.26.7）
+
+| 手段 | 是否影响运行时 | 说明 |
+| --- | --- | --- |
+| `metadata.yaml` → `support_platforms` | ❌ 否 | 只在 `star_manager` 读入 `StarMetadata` 并传给 dashboard 显示；`astrbot/core/pipeline/` 中零引用 |
+| `@filter.platform_adapter_type(...)` | ✅ 是 | `PlatformAdapterTypeFilter.filter()` 比对 `event.get_platform_name()` |
+
+`ADAPTER_NAME_2_TYPE` 常用 key：`aiocqhttp`(NapCat/OneBot)、`qq_official`、
+`qq_official_webhook`、`telegram`、`lark`、`discord`、`webchat` 等。
+类型是 `enum.Flag`，可用 `|` 组合；`PlatformAdapterType.ALL` 表示放行全部。
+
+**同类型多账号无法用它区分**（两个 `qq_official` 会同时命中）。此时应按
+`event.get_platform_id()`（如 `default_102824564`）自行判断，或依赖以
+`平台ID:...` 为前缀的数据分片。

@@ -66,6 +66,32 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 私聊/C2C 暂不发送 Hub 卡片；当普通 LLM 对话关闭时，用户私聊机器人会收到“请在群聊中 @我 输入 /qqhub 查看功能。”的短提示。
 
 
+## 平台隔离
+
+插件所有事件入口都带 QQ 官方适配器门禁：
+
+```python
+@filter.platform_adapter_type(
+    filter.PlatformAdapterType.QQOFFICIAL
+    | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+)
+```
+
+适合「NapCat 号跑重型/高风险插件 + 官方号只跑安全插件」的双号部署：即使两个账号
+挂在同一个 AstrBot 上，Hub 的指令与事件也只会在官方号上触发，不会污染 NapCat 号。
+
+关于 `metadata.yaml` 里的 `support_platforms`：
+
+| 字段 | 作用 |
+| --- | --- |
+| `metadata.yaml` 的 `support_platforms` | **仅 WebUI 展示标签**。AstrBot v4.26.7 把它读进 `StarMetadata` 交给 dashboard，事件流水线从不读取 |
+| `@filter.platform_adapter_type(...)` | **真正的运行时过滤**，未匹配的平台不会进入 handler |
+
+> ⚠️ 只写 `support_platforms` 不能阻止插件在其它平台被触发，两者必须都写。
+
+同类型的多个账号（例如两个 QQ 官方 Bot）无法用 `platform_adapter_type` 区分，
+但 Hub 的数据本身按 `平台ID:GroupMessage:群openid` 分片存储，配置天然互不干扰。
+
 ## 编辑器模板库与动态占位符
 
 卡片编辑页「Markdown 文案」下方有**模板库**，分组列出可一键插入光标处的片段：

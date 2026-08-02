@@ -29,7 +29,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.7.1", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.8.0", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -83,6 +83,10 @@ class QQOfficialHubPlugin(Star):
         if self.experimental_bridge:
             interaction_bridge.detach(PLUGIN_NAME)
 
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def observe_qqofficial_group(self, event: AstrMessageEvent):
         origin = str(getattr(event, "unified_msg_origin", "") or "")
@@ -93,6 +97,10 @@ class QQOfficialHubPlugin(Star):
         if platform is not None and platform.meta().name == "qq_official":
             await self.store.observe_group(origin, platform_id)
 
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def show_panel_hint_when_llm_disabled(self, event: AstrMessageEvent):
         """Last-resort hint for an otherwise unhandled QQ Official wake-up."""
@@ -162,6 +170,10 @@ class QQOfficialHubPlugin(Star):
             logger.exception("[QQHub] Failed to send panel")
             yield event.plain_result(f"测试卡发送失败：{type(exc).__name__}: {exc}")
 
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
     @filter.command("qqhub", priority=100)
     async def send_default_panel(self, event: AstrMessageEvent):
         """发送当前群配置的 QQ 官方 Hub 面板。"""
@@ -169,6 +181,10 @@ class QQOfficialHubPlugin(Star):
         async for result in self._send_panel_from_event(event, command_name="/qqhub"):
             yield result
 
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
     @filter.command("qqhub 面板", alias={"qqhub panel"}, priority=100)
     async def send_default_panel_legacy(self, event: AstrMessageEvent):
         """兼容旧入口：发送当前群配置的 QQ 官方 Hub 面板。"""
@@ -176,6 +192,10 @@ class QQOfficialHubPlugin(Star):
         async for result in self._send_panel_from_event(event, command_name="/qqhub 面板"):
             yield result
 
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
     @filter.command("qqhub 艾特回复测试", priority=100)
     async def mention_reply_probe(self, event: AstrMessageEvent):
         """Type 2/typed-command probe: one native text reply that At's sender."""
@@ -186,6 +206,10 @@ class QQOfficialHubPlugin(Star):
             logger.exception("[QQHub] Native mention reply probe failed")
             yield event.plain_result(f"艾特回复测试失败：{type(exc).__name__}: {exc}")
 
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
     @filter.command("qqhub 艾特主动测试", priority=100)
     async def mention_proactive_probe(self, event: AstrMessageEvent):
         """Type 2/typed-command probe: one proactive native text At."""
