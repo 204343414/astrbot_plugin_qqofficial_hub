@@ -161,6 +161,10 @@ await client.api.post_c2c_message(openid=..., ...)   # 单聊，参数同上
 | `authorize_data` | **仅 18/19**：`opt_scene`(setting/dialog)、`scope`(`c2c_push`/`group_push`) |
 
 > `authorize_data.scope` 是判断「该群/该用户是否授权主动推送」的**权威信号**。
+>
+> **但它只在授权状态变化时推送。** 装插件前就已授权、或从未授权的群不会有任何事件，
+> 因此上层必须保留「未知」态，不可把「无记录」当作「未授权」。
+> 另一个可靠信号是主动推送的真实成败：成功 = 已开启，被拒 = 未开启。
 
 ---
 

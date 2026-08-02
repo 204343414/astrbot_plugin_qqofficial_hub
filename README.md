@@ -17,6 +17,7 @@ QQ 官方机器人 Markdown＋Keyboard 可视化编辑器与 Interaction 安全�
 - 进程级 Action Registry；业务插件可按 owner 注册 type=1 直接执行动作，ID 冲突会拒绝；
 - AstrBot 已注册命令会自动生成 `command.<hash>` Action；点击后以点击者 OpenID/当前群构造内部消息并重新进入正常 CommandFilter/Permission/TempBan 流水线，群里不显示用户指令；
 - type=1 按钮支持服务端 JSON 参数（≤2048字节），命令 Action 使用 `{"arguments":"..."}`；参数不直接暴露在 QQ button_data；
+- 卡片支持主动推送状态指示灯：Markdown 里写 `{{push_lamp}}`（🟢/🔴/⚪）与 `{{push_status}}`（说明文字），发送时自动替换，灯与文案均可在配置里自定义；
 - 📖 **[QQ 官方接口与类型完整速查](docs/QQ_OFFICIAL_REFERENCE.md)** —— 动手前必读，含全部 interaction type、ACK code、额度限制与已知陷阱；
 - type=1 回调回复走**被动消息**：以 `INTERACTION_CREATE` 事件 ID 作为 `event_id` 下发，因此**无需群主开启主动推送权限**，也不消耗每月 4 条主动配额；每个事件最多用 5 次（官方上限），支持图片/语音/视频等富媒体（自动上传后以 msg_type=7 发送），失败或用尽自动回退主动推送路径；
 - `/qqhub` 发送当前群面板（`/qqhub 面板` 仍兼容）；
@@ -63,3 +64,32 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 配置 `empty_mention_opens_panel=true` 时，在 QQ 官方群里只 @ 机器人且不输入其他内容，会直接发送当前群面板；关闭后会提示“请@我输入 /qqhub 查看功能”。
 
 私聊/C2C 暂不发送 Hub 卡片；当普通 LLM 对话关闭时，用户私聊机器人会收到“请在群聊中 @我 输入 /qqhub 查看功能。”的短提示。
+
+
+## 主动消息推送状态指示灯
+
+在卡片 Markdown 中放置占位符，发送时自动替换：
+
+| 占位符 | 含义 |
+| --- | --- |
+| `{{push_lamp}}` | 指示灯：🟢 已开启 / 🔴 未开启 / ⚪ 未知 |
+| `{{push_status}}` | 说明文字，如「当前群未开启主动消息推送功能」 |
+
+示例：
+
+```markdown
+# 我的面板
+{{push_lamp}} {{push_status}}
+```
+
+状态有**三态**，来源有两个：
+
+1. **QQ 授权事件**（`INTERACTION_CREATE` type=18/19，`authorize_data.scope=group_push`）——权威信号；
+2. **主动推送的实际成败**——发成功即已开启，被拒即未开启。被动消息不参与推断。
+
+> ⚠️ 为什么必须有「未知」：QQ 只在授权**发生变化时**推事件。装插件之前就已授权、或从未授权过的群，
+> 我们收不到任何事件。此时若显示「未开启」就是误报，因此默认显示「未知」，
+> 直到收到授权事件或真实发过一次主动消息为止。
+
+文案刻意不使用「权限」二字（易引起抵触），描述为「功能未开启」。全部灯与文案可在
+`push_status_display` 配置中覆盖。

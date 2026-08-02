@@ -23,7 +23,7 @@ def empty_panel() -> dict[str, Any]:
     return {
         "id": PANEL_ID,
         "name": "QQ Official Hub 能力测试卡",
-        "markdown": "# QQ Official Hub 能力测试卡\n**Markdown 正文**、[🔗蓝色链接](https://bot.q.qq.com/) 与最多 5×5 个按钮。",
+        "markdown": "# QQ Official Hub 能力测试卡\n**Markdown 正文**、[🔗蓝色链接](https://bot.q.qq.com/) 与最多 5×5 个按钮。\n{{push_lamp}} {{push_status}}",
         "mention_clicker": True,
         "rows": [
             [
@@ -60,6 +60,7 @@ class PanelStore:
             "observed_groups": {},
             "issued_test_cards": {},
             "authorizations": {},
+            "push_states": {},
         }
 
     def _load(self) -> dict[str, Any]:
@@ -221,6 +222,31 @@ class PanelStore:
         async with self._lock:
             item = self._data.get("authorizations", {}).get(f"{platform_id}:{target}")
             return copy.deepcopy(item) if isinstance(item, dict) else None
+
+    async def set_push_state(self, origin: str, state: str, source: str) -> None:
+        """Record proactive-push state for a group origin.
+
+        ``source`` is kept for auditing: an ``authorize`` event is
+        authoritative, while ``send`` is inferred from a real send result.
+        """
+        import time
+        if not self._valid_group_origin(origin):
+            return
+        async with self._lock:
+            table = self._data.setdefault("push_states", {})
+            table[origin] = {
+                "state": str(state),
+                "source": str(source),
+                "updated_at": int(time.time()),
+            }
+            self._write_atomic(self._data)
+
+    async def get_push_state(self, origin: str) -> str:
+        async with self._lock:
+            item = self._data.get("push_states", {}).get(origin)
+            if isinstance(item, dict):
+                return str(item.get("state") or "unknown")
+            return "unknown"
 
     def _valid_group_origin(self, origin: str) -> bool:
         parts = origin.split(":", 2)
