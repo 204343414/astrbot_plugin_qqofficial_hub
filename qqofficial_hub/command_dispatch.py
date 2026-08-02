@@ -1,7 +1,10 @@
 """Dispatch a registered command through AstrBot's normal event pipeline."""
 from __future__ import annotations
 
+import random
 from typing import Any
+
+from astrbot.api import logger
 
 from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.message_components import At, Plain
@@ -37,6 +40,13 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         self.bot = client
         self._adapter = adapter
         self._mention_openid = mention_openid
+        self._group_openid = group_openid
+        # INTERACTION_CREATE.id is accepted by QQ as a passive-reply credential
+        # (docs: send.html, event_id supports "INTERACTION_CREATE"). Using it
+        # keeps button replies passive: no proactive-push permission needed and
+        # no monthly 4-message proactive quota consumed.
+        self._event_id = str(getattr(interaction, "id", "") or "")
+        self._event_id_used = False
         self.set_extra("qqhub_synthetic_command", True)
 
     async def send(self, message: MessageChain) -> None:
@@ -59,7 +69,42 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         # data (ActionContext.member_openid / logs) unless a later QQ official
         # capability provides a verified native @ path for group active replies.
         await super().send(message)
+        if await self._send_as_passive_reply(message):
+            return
         await self._adapter.send_by_session(self.session, message)
+
+    async def _send_as_passive_reply(self, message: MessageChain) -> bool:
+        """Reply using INTERACTION_CREATE's event_id instead of a proactive push.
+
+        Returns False so the caller can fall back to the proactive path when the
+        event id is missing, already spent, or rejected by QQ.
+        """
+        if not self._event_id or self._event_id_used or not self._group_openid:
+            return False
+        text = "".join(
+            str(getattr(part, "text", "") or "")
+            for part in (message.chain or [])
+            if part.__class__.__name__ == "Plain"
+        ).strip()
+        if not text:
+            return False
+        try:
+            await self.bot.api.post_group_message(
+                group_openid=self._group_openid,
+                msg_type=0,
+                content=text,
+                event_id=self._event_id,
+                msg_seq=random.randint(1, 10000),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[QQHub] Passive reply via event_id failed, falling back to "
+                "proactive send: %s",
+                exc,
+            )
+            return False
+        self._event_id_used = True
+        return True
 
     async def send_streaming(self, generator, use_fallback: bool = False):
         # Group commands should normally be non-streaming. If one streams,

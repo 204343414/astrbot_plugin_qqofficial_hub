@@ -26,7 +26,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.2.2", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.3.0", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -387,10 +387,16 @@ class QQOfficialHubPlugin(Star):
     async def _action_refresh(
         self, context: ActionContext, params: dict[str, Any]
     ) -> int:
+        # INTERACTION_CREATE carries an event id that QQ accepts as a passive
+        # reply credential (docs: send.html event_id supports
+        # "INTERACTION_CREATE"). Passing it keeps the button reply a *passive*
+        # message, so it needs neither the proactive-push permission nor the
+        # monthly 4-message proactive quota.
         task = asyncio.create_task(
             self._send_configured_panel(
                 context.origin,
                 client=context.client,
+                event_id=str(getattr(context.interaction, "id", "") or "") or None,
                 mention_openid=context.member_openid,
             )
         )
