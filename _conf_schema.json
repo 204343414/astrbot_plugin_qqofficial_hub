@@ -22,5 +22,17 @@
     "hint": "用于 permission=operator 的按钮后端校验；多个用逗号、空格或换行分隔。",
     "type": "text",
     "default": ""
+  },
+  "require_known_clicker": {
+    "description": "仅允许「说过话」的用户点击按钮",
+    "type": "bool",
+    "default": true,
+    "hint": "QQ 的按钮回调事件只带乱码 OpenID、不带昵称，因此陌生人无法被识别。开启后，未曾 @ 过机器人（或引用机器人消息）的人点击按钮会被拒绝，用于防止恶意刷卡卡群。真实参与者只需说过一次话即可，不影响正常使用。"
+  },
+  "show_clicker_name": {
+    "description": "卡片顶部显示操作者昵称",
+    "type": "bool",
+    "default": true,
+    "hint": "在卡片最顶部加一行「👤 昵称」，表明这张卡属于谁 / 是谁按的。昵称取自该用户最近一次与机器人说话时的资料，改名后会自动更新；这是纯文本，不是蓝色 @ 超链接（QQ 群主动消息路径会把 At 标签原样显示）。"
   }
 }

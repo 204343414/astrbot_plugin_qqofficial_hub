@@ -98,6 +98,26 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 
 完整 API 与 QQ 平台限制见 **[docs/EPHEMERAL_CARDS.md](docs/EPHEMERAL_CARDS.md)**。
 
+## 操作者身份与防刷
+
+QQ 的按钮回调事件（`INTERACTION_CREATE`）**只带乱码 OpenID，不带昵称**；昵称只出现在
+入站消息（`GROUP_AT_MESSAGE_CREATE` 的 `author.username`）里。由此有两个配置：
+
+| 配置 | 默认 | 作用 |
+| --- | --- | --- |
+| `require_known_clicker` | 开 | 未曾与机器人说过话的人点击按钮会被拒绝（ACK code 4），防止陌生人一键刷卡卡群 |
+| `show_clicker_name` | 开 | 卡片最顶部加一行「👤 昵称」，表明这张卡属于谁 / 是谁按的 |
+
+- 昵称在**每次**入站消息时刷新，因此改名会在对方下次说话后自动更新；
+- 显示为**纯文本**而非蓝色 @ —— 实测 QQ 群主动消息路径会把 At 标签原样显示；
+- 昵称会去除换行与 Markdown 字符，避免破坏卡片排版；
+- 身份**按群隔离**，不跨群继承；30 天未出现即遗忘。
+
+> 关于「双击头像戳一戳」：QQ 官方机器人 API **不推送**戳一戳事件
+> （群场景 `1<<25` 只有消息与成员进出类事件，`Poke` 组件仅服务于 OneBot/NapCat），
+> 因此没有提供该开关。想要「不打字就唤出面板」，请用已有的
+> `empty_mention_opens_panel`：群里空 @ 机器人即可弹出 Hub 面板。
+
 ## 平台隔离
 
 插件所有事件入口都带 QQ 官方适配器门禁：

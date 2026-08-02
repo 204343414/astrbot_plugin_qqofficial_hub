@@ -10,7 +10,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 
-from .qqofficial_hub import ephemeral, interaction_bridge
+from .qqofficial_hub import ephemeral, identity, interaction_bridge
 from .qqofficial_hub.action_registry import (
     ActionContext,
     ActionSpec,
@@ -31,7 +31,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.11.2", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.12.0", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -71,6 +71,9 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         self.empty_mention_opens_panel = bool(config.get("empty_mention_opens_panel", True))
         self.bridge_generation: int | None = None
         self._card_providers: dict[str, Any] = {}
+        self.require_known_clicker = bool(config.get("require_known_clicker", True))
+        self.show_clicker_name = bool(config.get("show_clicker_name", True))
+        self.identities = identity.IdentityBook(self.store)
         if self.experimental_bridge:
             self.bridge_generation = interaction_bridge.install(PLUGIN_NAME, self._handle_interaction)
 
@@ -99,6 +102,17 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         platform = self.context.get_platform_inst(platform_id)
         if platform is not None and platform.meta().name == "qq_official":
             await self.store.observe_group(origin, platform_id)
+            # A nickname is only ever available on inbound messages;
+            # INTERACTION_CREATE has none. Refresh on every message so a
+            # rename is picked up the next time the user speaks.
+            try:
+                await self.identities.remember(
+                    origin,
+                    str(event.get_sender_id() or ""),
+                    str(event.get_sender_name() or ""),
+                )
+            except Exception as exc:
+                logger.debug("[QQHub] Cannot record identity: %s", exc)
 
     @filter.platform_adapter_type(
         filter.PlatformAdapterType.QQOFFICIAL
@@ -388,13 +402,17 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         msg_id: str | None = None,
         event_id: str | None = None,
         mention_openid: str = "",
+        clicker_header: str = "",
     ) -> None:
         client = client or self._get_qq_client(origin)
         snapshot = await self.store.bootstrap()
         panel = snapshot["group_overrides"].get(origin) or snapshot["templates"]["default_panel"]
         nonce = await self.store.issue_panel_card(origin, panel, reply_msg_id=msg_id)
         rows = [{"buttons": [self._button(button, nonce) for button in row]} for row in panel["rows"]]
-        markdown_content = await self._render_dynamic_markdown(str(panel["markdown"]), origin)
+        markdown_content = self._prepend_header(
+            await self._render_dynamic_markdown(str(panel["markdown"]), origin),
+            clicker_header,
+        )
         # Real-device tests show both documented and legacy At tags are exposed
         # literally on this QQ group path. Keep the setting/card metadata for a
         # future native implementation, but never contaminate visible output.
@@ -430,6 +448,9 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
                 client=context.client,
                 event_id=passive_event_id(context.interaction) or None,
                 mention_openid=context.member_openid,
+                clicker_header=await self._clicker_header(
+                    context.origin, context.member_openid
+                ),
             )
         except Exception:
             logger.exception("[QQHub] Whiteboard refresh failed")

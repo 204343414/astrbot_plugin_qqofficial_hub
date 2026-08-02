@@ -17,6 +17,42 @@ from .passive_reply import next_msg_seq, passive_event_id
 class EphemeralCardMixin:
     """One-shot cards for flows and games."""
 
+    async def _clicker_allowed(self, origin: str, member_openid: str) -> bool:
+        """Refuse users the bot has never heard speak.
+
+        INTERACTION_CREATE carries no nickname, so an unknown OpenID cannot be
+        attributed to anyone. Letting strangers drive cards is what makes a
+        group griefable with a single tap; requiring one prior message raises
+        the cost without inconveniencing real participants.
+        """
+        if not getattr(self, "require_known_clicker", True):
+            return True
+        try:
+            if await self.identities.is_known(origin, member_openid):
+                return True
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("[QQHub] Identity check failed, allowing: %s", exc)
+            return True
+        logger.info(
+            "[QQHub] Rejected unknown clicker %s in %s",
+            member_openid[-6:], origin.split(":", 2)[-1][-8:],
+        )
+        return False
+
+    async def _clicker_header(self, origin: str, member_openid: str) -> str:
+        """A plain-text 'who did this' line. Never a real @ mention.
+
+        Field testing showed QQ renders both documented and legacy At tags
+        literally on this path, so a plain label is the honest option.
+        """
+        if not getattr(self, "show_clicker_name", True) or not member_openid:
+            return ""
+        try:
+            label = await self.identities.label_for(origin, member_openid)
+        except Exception:  # pragma: no cover - defensive
+            return ""
+        return f"👤 {label}" if label else ""
+
     async def _handle_ephemeral_click(
         self, client: Any, interaction: Any, nonce: str, button_id: str
     ) -> int:
@@ -25,6 +61,8 @@ class EphemeralCardMixin:
             return ephemeral.CODE_FAILED
         origin = f"{client.platform.meta().id}:GroupMessage:{group_openid}"
         member = str(getattr(interaction, "group_member_openid", "") or "")
+        if not await self._clicker_allowed(origin, member):
+            return ephemeral.CODE_FORBIDDEN
         try:
             button, record = await self.store.claim_ephemeral_click(
                 origin, nonce, button_id, member
@@ -75,6 +113,10 @@ class EphemeralCardMixin:
         params.setdefault("_session_id", session_id)
         return await self.actions.execute(action_id, context, params)
 
+    @staticmethod
+    def _prepend_header(markdown: str, header: str) -> str:
+        return f"{header}\n{markdown}" if header else markdown
+
     async def send_ephemeral_card(
         self,
         origin: str,
@@ -84,6 +126,7 @@ class EphemeralCardMixin:
         event_id: str | None = None,
         msg_id: str | None = None,
         initiator_openid: str = "",
+        clicker_header: str = "",
     ) -> str:
         """Send a one-off card. Public API for flow/game plugins.
 
@@ -100,8 +143,9 @@ class EphemeralCardMixin:
         payload: dict[str, Any] = {
             "group_openid": origin.split(":", 2)[-1],
             "msg_type": 2,
-            "markdown": {"content": await self._render_dynamic_markdown(
-                validated["markdown"], origin
+            "markdown": {"content": self._prepend_header(
+                await self._render_dynamic_markdown(validated["markdown"], origin),
+                clicker_header,
             )},
             "keyboard": {"content": {
                 "rows": ephemeral.to_keyboard_rows(validated, nonce)

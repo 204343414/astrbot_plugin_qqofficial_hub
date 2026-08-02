@@ -284,6 +284,36 @@ class PanelStore:
             )[: len(table) - 2000]:
                 table.pop(key, None)
 
+    async def remember_identity(self, key: str, name: str, ttl_seconds: int) -> bool:
+        """Store the latest nickname for an OpenID. True when it changed."""
+        import time
+        from . import identity
+        now = int(time.time())
+        async with self._lock:
+            table = self._data.setdefault("identities", {})
+            for existing, item in list(table.items()):
+                if not isinstance(item, dict) or int(item.get("expires_at", 0)) <= now:
+                    table.pop(existing, None)
+            if len(table) > identity.MAX_ENTRIES:
+                for stale in sorted(
+                    table, key=lambda k: int(table[k].get("seen_at", 0))
+                )[: len(table) - identity.MAX_ENTRIES]:
+                    table.pop(stale, None)
+            prior = table.get(key) if isinstance(table.get(key), dict) else {}
+            changed = str(prior.get("name") or "") != str(name)
+            table[key] = {
+                "name": str(name),
+                "seen_at": now,
+                "expires_at": now + int(ttl_seconds),
+            }
+            self._write_atomic(self._data)
+            return changed
+
+    async def get_identity(self, key: str) -> dict[str, Any] | None:
+        async with self._lock:
+            item = self._data.get("identities", {}).get(key)
+            return copy.deepcopy(item) if isinstance(item, dict) else None
+
     def _valid_group_origin(self, origin: str) -> bool:
         parts = origin.split(":", 2)
         return len(parts) == 3 and parts[1] == "GroupMessage" and bool(parts[0]) and bool(parts[2])

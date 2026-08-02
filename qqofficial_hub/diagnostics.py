@@ -37,6 +37,7 @@ HUB_MODULES = (
     "command_dispatch",
     "ephemeral",
     "ephemeral_routes",
+    "identity",
     "interaction_bridge",
     "issued_cards",
     "keyboard",
