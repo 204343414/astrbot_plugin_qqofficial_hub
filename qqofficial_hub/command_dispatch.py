@@ -98,10 +98,30 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         except Exception as exc:
             self._report_push_evidence("send", exc)
             raise
-        # NOTE: no success report here. AstrBot's qq_official adapter silently
-        # returns (only logging a warning) when a proactive group send is not
-        # allowed, so "no exception" does NOT prove the message went out.
-        # Reporting GRANTED here would be worse than staying unknown.
+        # AstrBot's qq_official adapter silently returns (warning only, no
+        # exception) when a proactive group send is refused, so "no exception"
+        # does NOT prove delivery. Detect the skip by checking whether the
+        # adapter had a usable msg_id / proactive allowance for this session.
+        if self._proactive_send_was_skipped():
+            self._report_push_evidence(
+                "send", RuntimeError("skip send_by_session: 群未开启主动消息")
+            )
+
+    def _proactive_send_was_skipped(self) -> bool:
+        """True when the adapter could not have delivered a proactive message.
+
+        Mirrors the adapter's own guard: without a cached msg_id the send is
+        skipped for group sessions. We deliberately do not consult
+        ``_allow_group_proactive_send`` — it is a hard-coded ``True`` and says
+        nothing about the group's real setting.
+        """
+        try:
+            cache = getattr(self._adapter, "_session_last_message_id", None)
+            if not isinstance(cache, dict):
+                return False
+            return not cache.get(self.session.session_id)
+        except Exception:  # pragma: no cover - never break a send over telemetry
+            return False
 
     def _report_push_evidence(self, source: str, error: Exception | None) -> None:
         reporter = getattr(self, "_push_reporter", None)

@@ -235,6 +235,8 @@ class PanelStore:
         from . import push_probe
         if not self._valid_group_origin(origin):
             return False
+        if str(source) in push_probe.DISTRUSTED_SOURCES:
+            return False
         async with self._lock:
             table = self._data.setdefault("push_states", {})
             prior = table.get(origin) if isinstance(table.get(origin), dict) else {}
@@ -255,11 +257,16 @@ class PanelStore:
             return changed
 
     async def get_push_state(self, origin: str) -> str:
+        from . import push_probe
         async with self._lock:
             item = self._data.get("push_states", {}).get(origin)
-            if isinstance(item, dict):
-                return str(item.get("state") or "unknown")
-            return "unknown"
+            if not isinstance(item, dict):
+                return "unknown"
+            # Values written by a since-retracted heuristic must not be trusted;
+            # a wrong "granted" is worse than admitting we do not know.
+            if str(item.get("source") or "") in push_probe.DISTRUSTED_SOURCES:
+                return "unknown"
+            return str(item.get("state") or "unknown")
 
     def _valid_group_origin(self, origin: str) -> bool:
         parts = origin.split(":", 2)

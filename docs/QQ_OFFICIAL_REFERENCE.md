@@ -168,7 +168,11 @@ await client.api.post_c2c_message(openid=..., ...)   # 单聊，参数同上
 >
 > **但 AstrBot v4.26.7 的 `qq_official` 适配器在不允许主动推送时是静默 return**
 > （`send_by_session` 只打 `No cached msg_id ... skip send_by_session` 警告，不抛异常），
-> 所以"调用没报错"不能当作发送成功。可直接读适配器的 `_allow_group_proactive_send` 标志。
+> 所以"调用没报错"不能当作发送成功。
+>
+> ⚠️ **`_allow_group_proactive_send` 不可用于判断群是否开启推送**：它在
+> `__init__` 里被硬编码为 `True`，全代码库再无任何赋值，表达的是"AstrBot 允许尝试"
+> 而非 QQ 侧的真实开关。判断请改用「是否有缓存 msg_id」+ 真实发送失败原因。
 
 ---
 

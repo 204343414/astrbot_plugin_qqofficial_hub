@@ -93,8 +93,12 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 | 来源 | 说明 |
 | --- | --- |
 | `authorize` | QQ 授权事件（type=18/19，`scope=group_push`），最权威 |
-| `send` | 主动推送的真实失败原因（仅当错误明确指向"未开启主动消息"时才判定） |
-| `adapter` | 直接读取 AstrBot 适配器的 `_allow_group_proactive_send`，渲染卡片时自动探测 |
+| `send` | 主动推送的真实结果：失败原因明确指向"未开启主动消息"，或适配器静默跳过了发送 |
+
+> 🚫 **不要**用 AstrBot 的 `_allow_group_proactive_send` 判断。它是**硬编码的 `True`**，
+> 含义是"AstrBot 会尝试主动发送"，而非"该群已开启推送"。曾据此点亮绿灯，
+> 导致未开启推送的群显示"已开启"。该来源已被列入 `DISTRUSTED_SOURCES`，
+> 历史上写入的错误值在读取时会被作废为「未知」。
 
 被动消息不参与推断。审核中、限频、参数错误等**无关失败不会**被误判为"未开启"。
 

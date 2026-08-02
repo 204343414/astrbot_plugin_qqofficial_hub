@@ -46,7 +46,7 @@ def _authorize_flag(authorize: object):
     return None
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.6.1", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.6.2", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -418,35 +418,6 @@ class QQOfficialHubPlugin(Star):
             )
         return state
 
-    async def _probe_adapter_push_capability(self, origin: str) -> None:
-        """Read the adapter's own proactive-send capability for this session.
-
-        AstrBot's qq_official adapter tracks whether a group session may be
-        pushed to proactively. When it says "no" the send is skipped silently
-        (warning only, no exception), so consulting the flag directly is both
-        cheaper and more reliable than sending a probe message and guessing.
-        """
-        try:
-            platform = self.context.get_platform_inst(origin.split(":", 1)[0])
-            if platform is None or platform.meta().name != "qq_official":
-                return
-            group_openid = push_probe.group_openid_of(origin)
-            if not group_openid:
-                return
-            scene = getattr(platform, "_session_scene", {}).get(group_openid)
-            if scene != "group":
-                return
-            allowed = getattr(platform, "_allow_group_proactive_send", None)
-            if allowed is None:
-                return
-            await self.store.set_push_state(
-                origin,
-                push_status.GRANTED if allowed else push_status.REVOKED,
-                "adapter",
-            )
-        except Exception as exc:
-            logger.debug("[QQHub] Adapter push probe skipped: %s", exc)
-
     async def _render_dynamic_markdown(self, markdown: str, origin: str) -> str:
         """Resolve editor-inserted placeholders just before sending.
 
@@ -456,9 +427,6 @@ class QQOfficialHubPlugin(Star):
         if "{{" not in markdown:
             return markdown
         if push_status.has_placeholder(markdown):
-            # Refresh from the adapter first so a card rendered right after
-            # startup does not show "unknown" when the answer is already known.
-            await self._probe_adapter_push_capability(origin)
             markdown = push_status.render(
                 markdown,
                 await self.store.get_push_state(origin),

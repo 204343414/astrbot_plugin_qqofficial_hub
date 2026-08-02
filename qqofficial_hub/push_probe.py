@@ -13,11 +13,15 @@ place instead of each guessing separately.
 
 Evidence ranking (highest wins on ties):
 
-``authorize`` > ``send`` > ``adapter``
+``authorize`` > ``send``
 
-An authorize event is QQ's own statement; a send result is empirical; an
-adapter-level refusal (AstrBot skipping the send) is the weakest but still
-decisive when it says "no".
+An authorize event is QQ's own statement; a send result is empirical.
+
+.. warning::
+   Do **not** infer state from AstrBot's ``_allow_group_proactive_send``.
+   It is a hard-coded ``True`` that means "AstrBot will attempt a proactive
+   send", never "QQ has enabled proactive push for this group". Reading it
+   produced a green lamp for groups that had push switched off.
 """
 from __future__ import annotations
 
@@ -27,7 +31,10 @@ GRANTED = "granted"
 REVOKED = "revoked"
 UNKNOWN = "unknown"
 
-SOURCE_RANK = {"adapter": 1, "send": 2, "authorize": 3}
+SOURCE_RANK = {"send": 2, "authorize": 3}
+
+#: Sources whose stored values are known-bad and must be discarded on load.
+DISTRUSTED_SOURCES = frozenset({"adapter"})
 
 #: QQ error fragments that mean "this group has not enabled proactive push".
 #: Matched case-insensitively against the stringified exception.
