@@ -22,7 +22,7 @@ from .qqofficial_hub.command_dispatch import (
     dispatch_registered_command,
     passive_event_id,
 )
-from .qqofficial_hub import push_status
+from .qqofficial_hub import push_probe, push_status
 from .qqofficial_hub.passive_reply import next_msg_seq
 from .qqofficial_hub.store import PanelStore
 from .web import HubWebController
@@ -46,7 +46,7 @@ def _authorize_flag(authorize: object):
     return None
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.6.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.6.1", "204343414")
 class QQOfficialHubPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -288,6 +288,7 @@ class QQOfficialHubPlugin(Star):
                         if context.mention_clicker
                         else ""
                     ),
+                    push_reporter=self._push_reporter,
                 )
                 return 0
 
@@ -384,6 +385,68 @@ class QQOfficialHubPlugin(Star):
             },
         }
 
+    def _push_reporter(self, group_openid: str, source: str, error: Exception | None) -> None:
+        """Sync entry point used by synthetic events to report send outcomes."""
+        origin = f"{self._platform_id_of(None)}:GroupMessage:{group_openid}"
+        asyncio.create_task(self.report_push_result(origin, error, source=source))
+
+    async def report_push_result(
+        self, origin: str, error: Exception | None = None, *, source: str = "send"
+    ) -> str:
+        """Record the outcome of a proactive send. Public API for other plugins.
+
+        Any plugin that attempts a proactive group message can call this so the
+        Hub lamp reflects reality instead of waiting for an authorize event
+        that may never arrive::
+
+            hub = context.get_registered_star("astrbot_plugin_qqofficial_hub")
+            await hub.star_cls_obj.report_push_result(origin, exc)
+
+        Passing ``error=None`` means the send succeeded.
+        """
+        state = (
+            push_status.GRANTED if error is None
+            else push_probe.classify_send_error(error)
+        )
+        if state == push_status.UNKNOWN:
+            return state
+        changed = await self.store.set_push_state(origin, state, source)
+        if changed:
+            logger.info(
+                "[QQHub] Push state for %s -> %s (source=%s)",
+                origin.split(":", 2)[-1][-8:], state, source,
+            )
+        return state
+
+    async def _probe_adapter_push_capability(self, origin: str) -> None:
+        """Read the adapter's own proactive-send capability for this session.
+
+        AstrBot's qq_official adapter tracks whether a group session may be
+        pushed to proactively. When it says "no" the send is skipped silently
+        (warning only, no exception), so consulting the flag directly is both
+        cheaper and more reliable than sending a probe message and guessing.
+        """
+        try:
+            platform = self.context.get_platform_inst(origin.split(":", 1)[0])
+            if platform is None or platform.meta().name != "qq_official":
+                return
+            group_openid = push_probe.group_openid_of(origin)
+            if not group_openid:
+                return
+            scene = getattr(platform, "_session_scene", {}).get(group_openid)
+            if scene != "group":
+                return
+            allowed = getattr(platform, "_allow_group_proactive_send", None)
+            if allowed is None:
+                return
+            await self.store.set_push_state(
+                origin,
+                push_status.GRANTED if allowed else push_status.REVOKED,
+                "adapter",
+            )
+        except Exception as exc:
+            logger.debug("[QQHub] Adapter push probe skipped: %s", exc)
+
     async def _render_dynamic_markdown(self, markdown: str, origin: str) -> str:
         """Resolve editor-inserted placeholders just before sending.
 
@@ -393,6 +456,9 @@ class QQOfficialHubPlugin(Star):
         if "{{" not in markdown:
             return markdown
         if push_status.has_placeholder(markdown):
+            # Refresh from the adapter first so a card rendered right after
+            # startup does not show "unknown" when the answer is already known.
+            await self._probe_adapter_push_capability(origin)
             markdown = push_status.render(
                 markdown,
                 await self.store.get_push_state(origin),
@@ -436,14 +502,15 @@ class QQOfficialHubPlugin(Star):
         proactive = not msg_id and not event_id
         try:
             await client.api.post_group_message(**payload)
-        except Exception:
-            # A rejected *proactive* send is hard evidence that push is off.
-            # Passive sends say nothing about push, so never infer from them.
+        except Exception as exc:
+            # Only a *proactive* send tells us anything, and only when the error
+            # actually names a push restriction; audits and rate limits must not
+            # mislabel a healthy group.
             if proactive:
-                await self.store.set_push_state(origin, push_status.REVOKED, "send")
+                await self.report_push_result(origin, exc)
             raise
         if proactive:
-            await self.store.set_push_state(origin, push_status.GRANTED, "send")
+            await self.report_push_result(origin, None)
         logger.info("[QQHub] Configured panel sent to %s revision=%s", origin, panel.get("revision"))
 
     async def _action_refresh(

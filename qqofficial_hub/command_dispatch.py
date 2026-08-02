@@ -65,6 +65,7 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         # no monthly 4-message proactive quota consumed.
         self._event_id = passive_event_id(interaction)
         self._replies_used = 0
+        self._push_reporter = None
         self.set_extra("qqhub_synthetic_command", True)
 
     async def send(self, message: MessageChain) -> None:
@@ -89,7 +90,27 @@ class HubSyntheticCommandEvent(AstrMessageEvent):
         await super().send(message)
         if await self._send_as_passive_reply(message):
             return
-        await self._adapter.send_by_session(self.session, message)
+        # Falling through means we are about to attempt a *proactive* push.
+        # Its outcome is the most common real-world evidence of whether this
+        # group has proactive messages enabled, so report it to the Hub.
+        try:
+            await self._adapter.send_by_session(self.session, message)
+        except Exception as exc:
+            self._report_push_evidence("send", exc)
+            raise
+        # NOTE: no success report here. AstrBot's qq_official adapter silently
+        # returns (only logging a warning) when a proactive group send is not
+        # allowed, so "no exception" does NOT prove the message went out.
+        # Reporting GRANTED here would be worse than staying unknown.
+
+    def _report_push_evidence(self, source: str, error: Exception | None) -> None:
+        reporter = getattr(self, "_push_reporter", None)
+        if reporter is None or not self._group_openid:
+            return
+        try:
+            reporter(self._group_openid, source, error)
+        except Exception:  # pragma: no cover - never break a send over telemetry
+            logger.debug("[QQHub] push evidence reporting failed", exc_info=True)
 
     async def _send_as_passive_reply(self, message: MessageChain) -> bool:
         """Reply using INTERACTION_CREATE's event_id instead of a proactive push.
@@ -145,6 +166,7 @@ def dispatch_registered_command(
     interaction: Any,
     command: str,
     mention_openid: str = "",
+    push_reporter: Any = None,
 ) -> None:
     adapter = getattr(client, "platform", None)
     if adapter is None:
@@ -156,4 +178,5 @@ def dispatch_registered_command(
         interaction,
         mention_openid=mention_openid,
     )
+    event._push_reporter = push_reporter
     adapter.commit_event(event)

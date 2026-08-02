@@ -88,8 +88,27 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 
 ### 推送状态的三态与来源
 
-1. **QQ 授权事件**（`INTERACTION_CREATE` type=18/19，`authorize_data.scope=group_push`）——权威信号；
-2. **主动推送的实际成败**——发成功即已开启，被拒即未开启。被动消息不参与推断。
+按可信度排序，高优先级不会被低优先级覆盖：
+
+| 来源 | 说明 |
+| --- | --- |
+| `authorize` | QQ 授权事件（type=18/19，`scope=group_push`），最权威 |
+| `send` | 主动推送的真实失败原因（仅当错误明确指向"未开启主动消息"时才判定） |
+| `adapter` | 直接读取 AstrBot 适配器的 `_allow_group_proactive_send`，渲染卡片时自动探测 |
+
+被动消息不参与推断。审核中、限频、参数错误等**无关失败不会**被误判为"未开启"。
+
+> ⚠️ 注意：AstrBot 的 `qq_official` 适配器在不允许主动推送时是**静默 return**（只打 warning，不抛异常），
+> 因此"没报错"并不能证明消息发出去了，这条路径不上报"已开启"。
+
+### 其他插件上报
+
+任何尝试主动推送的插件都可以把结果告诉 Hub，让灯立刻准确：
+
+```python
+hub = context.get_registered_star("astrbot_plugin_qqofficial_hub")
+await hub.star_cls_obj.report_push_result(origin, exc)   # exc=None 表示成功
+```
 
 > ⚠️ 为什么必须有「未知」：QQ 只在授权**发生变化时**推事件。装插件之前就已授权、或从未授权过的群，
 > 我们收不到任何事件。此时若显示「未开启」就是误报，因此默认「未知」。

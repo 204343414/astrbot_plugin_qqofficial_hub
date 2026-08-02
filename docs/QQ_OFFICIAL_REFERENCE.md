@@ -165,6 +165,10 @@ await client.api.post_c2c_message(openid=..., ...)   # 单聊，参数同上
 > **但它只在授权状态变化时推送。** 装插件前就已授权、或从未授权的群不会有任何事件，
 > 因此上层必须保留「未知」态，不可把「无记录」当作「未授权」。
 > 另一个可靠信号是主动推送的真实成败：成功 = 已开启，被拒 = 未开启。
+>
+> **但 AstrBot v4.26.7 的 `qq_official` 适配器在不允许主动推送时是静默 return**
+> （`send_by_session` 只打 `No cached msg_id ... skip send_by_session` 警告，不抛异常），
+> 所以"调用没报错"不能当作发送成功。可直接读适配器的 `_allow_group_proactive_send` 标志。
 
 ---
 

@@ -223,23 +223,36 @@ class PanelStore:
             item = self._data.get("authorizations", {}).get(f"{platform_id}:{target}")
             return copy.deepcopy(item) if isinstance(item, dict) else None
 
-    async def set_push_state(self, origin: str, state: str, source: str) -> None:
+    async def set_push_state(self, origin: str, state: str, source: str) -> bool:
         """Record proactive-push state for a group origin.
 
-        ``source`` is kept for auditing: an ``authorize`` event is
-        authoritative, while ``send`` is inferred from a real send result.
+        ``source`` is kept for auditing and precedence: an ``authorize`` event
+        is authoritative, ``send`` is inferred from a real send result, and
+        ``adapter`` is the weakest signal. Returns True when the stored value
+        actually changed.
         """
         import time
+        from . import push_probe
         if not self._valid_group_origin(origin):
-            return
+            return False
         async with self._lock:
             table = self._data.setdefault("push_states", {})
+            prior = table.get(origin) if isinstance(table.get(origin), dict) else {}
+            if not push_probe.should_replace(
+                str(prior.get("state") or "unknown"),
+                str(prior.get("source") or ""),
+                str(state),
+                str(source),
+            ):
+                return False
+            changed = str(prior.get("state") or "unknown") != str(state)
             table[origin] = {
                 "state": str(state),
                 "source": str(source),
                 "updated_at": int(time.time()),
             }
             self._write_atomic(self._data)
+            return changed
 
     async def get_push_state(self, origin: str) -> str:
         async with self._lock:
