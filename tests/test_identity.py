@@ -124,3 +124,26 @@ def test_identity_survives_reload():
         await again.bootstrap()
         assert await identity.IdentityBook(again).name_of(ORIGIN, ALICE) == "小明"
     asyncio.run(scenario())
+
+
+def test_header_is_derived_automatically_when_not_supplied():
+    """A game plugin only passes initiator_openid; the header must be free.
+
+    Requiring every caller to build the header by hand is why the tic-tac-toe
+    board never showed one.
+    """
+    import inspect
+    from qqofficial_hub.ephemeral_routes import EphemeralCardMixin
+
+    sig = inspect.signature(EphemeralCardMixin.send_ephemeral_card)
+    default = sig.parameters["clicker_header"].default
+    assert default is None, "默认应为 None 以便自动推导，而不是空字符串"
+    source = inspect.getsource(EphemeralCardMixin.send_ephemeral_card)
+    assert "_clicker_header(origin, initiator_openid)" in source
+
+
+def test_empty_header_can_still_be_forced():
+    import inspect
+    from qqofficial_hub.ephemeral_routes import EphemeralCardMixin
+    source = inspect.getsource(EphemeralCardMixin.send_ephemeral_card)
+    assert "if clicker_header is None:" in source, "显式传 '' 应能抑制顶部行"

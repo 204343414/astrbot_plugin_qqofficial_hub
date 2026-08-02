@@ -106,7 +106,7 @@ QQ 的按钮回调事件（`INTERACTION_CREATE`）**只带乱码 OpenID，不带
 | 配置 | 默认 | 作用 |
 | --- | --- | --- |
 | `require_known_clicker` | 开 | 未曾与机器人说过话的人点击按钮会被拒绝（ACK code 4），防止陌生人一键刷卡卡群 |
-| `show_clicker_name` | 开 | 卡片最顶部加一行「👤 昵称」，表明这张卡属于谁 / 是谁按的 |
+| `show_clicker_name` | 开 | 卡片最顶部加一行「👤 昵称」，表明这张卡属于谁 / 是谁按的。调用 `send_ephemeral_card` 只需传 `initiator_openid`，顶部行会自动生成；传 `clicker_header=""` 可抑制 |
 
 - 昵称在**每次**入站消息时刷新，因此改名会在对方下次说话后自动更新；
 - 显示为**纯文本**而非蓝色 @ —— 实测 QQ 群主动消息路径会把 At 标签原样显示；

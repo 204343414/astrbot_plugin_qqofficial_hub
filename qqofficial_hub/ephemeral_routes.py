@@ -126,14 +126,21 @@ class EphemeralCardMixin:
         event_id: str | None = None,
         msg_id: str | None = None,
         initiator_openid: str = "",
-        clicker_header: str = "",
+        clicker_header: str | None = None,
     ) -> str:
         """Send a one-off card. Public API for flow/game plugins.
 
         Returns the session id so a plugin can retire the whole flow later via
         :meth:`end_ephemeral_session`.
+
+        ``clicker_header`` defaults to an automatically derived "👤 name" line
+        for ``initiator_openid``. Callers do not have to know the feature
+        exists -- a game plugin that simply passes ``initiator_openid`` gets the
+        header for free. Pass ``""`` to suppress it explicitly.
         """
         validated = ephemeral.validate_card(card)
+        if clicker_header is None:
+            clicker_header = await self._clicker_header(origin, initiator_openid)
         # "仅发起者可用" only has meaning when a click triggered this send.
         validated = ephemeral.bind_initiator(validated, initiator_openid)
         client = client or self._get_qq_client(origin)
