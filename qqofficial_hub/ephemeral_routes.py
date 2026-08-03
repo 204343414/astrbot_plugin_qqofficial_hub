@@ -5,6 +5,7 @@ and configuration. See ``docs/EPHEMERAL_CARDS.md`` for the contract.
 """
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 from astrbot.api import logger
@@ -116,6 +117,56 @@ class EphemeralCardMixin:
     @staticmethod
     def _prepend_header(markdown: str, header: str) -> str:
         return f"{header}\n{markdown}" if header else markdown
+
+    async def send_image_message(
+        self,
+        origin: str,
+        image: bytes,
+        text: str = "",
+        client: Any = None,
+        event_id: str | None = None,
+        msg_id: str | None = None,
+    ) -> str:
+        """Send one image and return the QQ message id it was given.
+
+        Games whose board is a picture need that id so they can require players
+        to *quote the board* when replying with a move. Without it there is no
+        way to tell a real move from someone typing "H8" in conversation.
+
+        Returns "" when QQ does not report an id; callers should degrade to
+        accepting un-quoted moves rather than blocking play.
+        """
+        from .passive_reply import IMAGE_FILE_TYPE, _upload_media, real_msg_id
+
+        client = client or self._get_qq_client(origin)
+        group_openid = origin.split(":", 2)[-1]
+        uploaded = await _upload_media(
+            client, IMAGE_FILE_TYPE, "base64://" + base64.b64encode(image).decode(),
+            None, group_openid=group_openid,
+        )
+        if uploaded is None:
+            raise RuntimeError("图片上传失败")
+        payload: dict[str, Any] = {
+            "group_openid": group_openid,
+            "msg_type": 7,
+            "media": {"file_info": uploaded["file_info"]},
+            "msg_seq": next_msg_seq(),
+        }
+        if text:
+            payload["content"] = text
+        msg_id = real_msg_id(msg_id)
+        if msg_id:
+            payload["msg_id"] = msg_id
+        elif event_id:
+            payload["event_id"] = event_id
+        result = await client.api.post_group_message(**payload)
+        for attr in ("id", "msg_id", "message_id"):
+            value = getattr(result, attr, None) or (
+                result.get(attr) if isinstance(result, dict) else None
+            )
+            if value:
+                return str(value)
+        return ""
 
     async def send_ephemeral_card(
         self,

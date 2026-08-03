@@ -251,3 +251,18 @@ def test_editor_can_refresh_the_action_catalog():
     root = Path(__file__).parents[1] / "pages" / "panels"
     assert 'id="reload-catalog"' in (root / "index.html").read_text("utf-8")
     assert "reload-catalog" in (root / "app.js").read_text("utf-8")
+
+
+def test_hub_exposes_an_image_send_that_returns_the_message_id():
+    """Picture-board games must be able to demand a quote of the board.
+
+    That requires knowing the id QQ assigned to the image message; without it
+    a plain "H8" in conversation is indistinguishable from a move.
+    """
+    source = Path(__file__).parents[1].joinpath(
+        "qqofficial_hub/ephemeral_routes.py").read_text("utf-8")
+    assert "async def send_image_message" in source
+    body = source[source.index("async def send_image_message"):]
+    body = body[: body.index("async def send_ephemeral_card")]
+    assert 'for attr in ("id", "msg_id", "message_id")' in body, "应回传消息 id"
+    assert "IMAGE_FILE_TYPE" in body

@@ -204,3 +204,22 @@ ServerError: 请求参数msg_id无效或越权
 `send_ephemeral_card()` 会自动用 `real_msg_id()` 过滤掉这类伪造 id，
 所以调用方可以放心地把 `event.message_obj.message_id` 传进来。
 优先传 `event_id`（来自 `INTERACTION_CREATE`）仍然是最稳的做法。
+
+
+## 图片棋盘：`send_image_message`
+
+棋盘超过 5×5 的游戏（五子棋、围棋、象棋）无法用按钮表达，应发图片并让玩家
+**引用图片回复坐标**。
+
+```python
+msg_id = await hub.send_image_message(
+    origin, png_bytes, text="引用本图回复坐标落子，例如 H8",
+    client=..., event_id=..., msg_id=...,
+)
+```
+
+返回 QQ 分配的消息 id。把它存进对局状态，收到消息时比对 `Reply.id`，
+即可区分「真的在下棋」与「群里恰好聊到 H8」。返回 `""` 时应降级为接受
+未引用的坐标，而不是让人无法落子。
+
+> 注意：QQ 不允许富媒体与 keyboard 同条消息，所以图片棋盘不能附带按钮。
