@@ -122,6 +122,15 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 全部**实时枚举而非写死清单**：外部插件卸载后刷新即消失，新增 Hub 模块若忘记登记，
 测例 `test_no_hub_module_is_missing_from_the_report` 会直接失败。
 
+> **升级 Hub 不会再清空外部 Action。** AstrBot 更新插件时会把
+> `data.plugins.<hub>.*` 从 `sys.modules` 全部删除再重新 import
+> （`star_manager._purge_modules`），于是 `ActionRegistry` **类对象**换了一个。
+> 注册表本身挂在 `builtins` 上跨重载存活，但旧的 `isinstance` 判据会认不出它，
+> 从而静默新建一个空表——已注册的外部 Action 全部消失，诊断页显示「外部插件 0 个」。
+> 现在改用协议号 + 方法面（`is_compatible_registry`）判定，测例
+> `test_third_party_actions_survive_a_hub_module_reload` 会真的重新 import
+> 一次模块来验证。
+
 ## 一次性卡片（流程 / 游戏）
 
 除「每群一张、改版即失效」的配置面板外，Hub 还提供**一次性卡片**：由其他插件

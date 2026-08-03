@@ -9,6 +9,13 @@ from typing import Any, Awaitable, Callable
 _REGISTRY_KEY = "_ASTRBOT_QQHUB_ACTION_REGISTRY_V1"
 ActionCallback = Callable[["ActionContext", dict[str, Any]], Awaitable[int]]
 
+#: Bumped only when the registry's *method surface* changes incompatibly.
+#: See ``get_action_registry`` for why an ``isinstance`` check is not usable.
+REGISTRY_PROTOCOL = 1
+_REGISTRY_SURFACE = (
+    "register", "unregister_owner", "catalog", "contains", "execute",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ActionContext:
@@ -44,6 +51,10 @@ class ActionSpec:
 
 
 class ActionRegistry:
+    #: Read by ``get_action_registry`` to decide whether a registry left behind
+    #: by a *previous incarnation of this module* is still usable.
+    protocol = REGISTRY_PROTOCOL
+
     def __init__(self) -> None:
         self._actions: dict[str, ActionSpec] = {}
         self._lock = asyncio.Lock()
@@ -98,9 +109,31 @@ class ActionRegistry:
         return result if result in {0, 1, 2, 3, 4, 5} else 1
 
 
+def is_compatible_registry(registry: object) -> bool:
+    """Duck-typed compatibility check for a registry from another incarnation.
+
+    ``isinstance`` is **wrong** here and was a real bug: AstrBot's plugin
+    reload deletes every ``data.plugins.<hub>.*`` entry from ``sys.modules``
+    (star_manager ``_purge_modules``) and re-imports the package, producing a
+    brand-new ``ActionRegistry`` *class object*. The registry parked on
+    ``builtins`` was built by the previous class, so ``isinstance`` returns
+    False, the Hub silently created an empty registry, and every Action that
+    third-party plugins had registered vanished -- the panel then reported
+    "外部插件 0 个" even though those plugins were loaded and healthy.
+
+    So identity is checked by protocol number plus the method surface actually
+    called, which is what "same class" was ever meant to stand for.
+    """
+    if registry is None:
+        return False
+    if getattr(registry, "protocol", None) != REGISTRY_PROTOCOL:
+        return False
+    return all(callable(getattr(registry, name, None)) for name in _REGISTRY_SURFACE)
+
+
 def get_action_registry() -> ActionRegistry:
     registry = getattr(builtins, _REGISTRY_KEY, None)
-    if not isinstance(registry, ActionRegistry):
+    if not is_compatible_registry(registry):
         registry = ActionRegistry()
         setattr(builtins, _REGISTRY_KEY, registry)
     return registry
