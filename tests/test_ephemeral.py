@@ -299,3 +299,4 @@ def test_bind_initiator_is_noop_without_initiator_mode():
     card = ep.validate_card({"markdown": "x",
                              "rows": [[{"id": "a", "label": "A", "action_id": "x"}]]})
     assert ep.bind_initiator(card, "") == card
+

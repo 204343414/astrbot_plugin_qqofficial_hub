@@ -60,8 +60,10 @@ def _install_astrbot_stubs():
 
     api = types.ModuleType("astrbot.api")
     api.logger = SimpleNamespace(
+        debug=lambda *a, **k: None,
         warning=lambda *a, **k: None,
         info=lambda *a, **k: None,
+        error=lambda *a, **k: None,
         exception=lambda *a, **k: None,
     )
     event_mod = types.ModuleType("astrbot.api.event")
@@ -362,3 +364,149 @@ def test_interaction_ack_id_and_event_id_are_distinct():
     i = SimpleNamespace(id="ACK-1", event_id="EVT-1")
     assert interaction_ack_id(i) == "ACK-1"
     assert passive_event_id(i) == "EVT-1"
+
+
+# --- recall -----------------------------------------------------------------
+#
+# botpy 1.2.1 only implements recall for guild channels, so the group and C2C
+# v2 routes are hand-built. These pin the exact paths and the two-minute window
+# documented at server-inter/message/send-receive/reset.html.
+
+def _recall_client(result=None):
+    calls = []
+
+    async def request(route, **kwargs):
+        calls.append(route)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    client = SimpleNamespace(api=SimpleNamespace(_http=SimpleNamespace(request=request)))
+    return client, calls
+
+
+def test_group_recall_uses_the_documented_v2_route():
+    async def scenario():
+        from qqofficial_hub import passive_reply as pr
+
+        client, calls = _recall_client()
+        assert await pr.recall_message(client, "MSG1", group_openid="G1") is True
+        route = calls[0]
+        assert route.method == "DELETE"
+        assert "/v2/groups/" in route.path and "/messages/" in route.path
+    asyncio.run(scenario())
+
+
+def test_c2c_recall_uses_the_users_route():
+    async def scenario():
+        from qqofficial_hub import passive_reply as pr
+
+        client, calls = _recall_client()
+        assert await pr.recall_message(client, "MSG1", user_openid="U1") is True
+        assert "/v2/users/" in calls[0].path
+    asyncio.run(scenario())
+
+
+def test_recall_reports_failure_instead_of_raising():
+    """A failed tidy-up must never break the action it was tidying after."""
+    async def scenario():
+        from qqofficial_hub import passive_reply as pr
+
+        client, _ = _recall_client(RuntimeError("消息不存在"))
+        assert await pr.recall_message(client, "MSG1", group_openid="G1") is False
+    asyncio.run(scenario())
+
+
+def test_recall_needs_a_real_message_id_and_a_target():
+    async def scenario():
+        from qqofficial_hub import passive_reply as pr
+
+        client, calls = _recall_client()
+        assert await pr.recall_message(client, "", group_openid="G1") is False
+        assert await pr.recall_message(
+            client, "hub-interaction:abc", group_openid="G1") is False
+        assert await pr.recall_message(client, "MSG1") is False
+        assert calls == [], "无效参数不应真的发出请求"
+    asyncio.run(scenario())
+
+
+def test_the_two_minute_window_is_checked_before_spending_a_request():
+    import time
+
+    from qqofficial_hub import passive_reply as pr
+
+    now = time.time()
+    assert pr.within_recall_window(now) is True
+    assert pr.within_recall_window(now - 60) is True
+    assert pr.within_recall_window(now - 130) is False, "超过 2 分钟不可撤回"
+    # A margin below the hard limit, because our clock is not QQ's clock.
+    assert pr.RECALL_SAFETY_MARGIN_SECONDS > 0
+    assert pr.within_recall_window(now - (pr.RECALL_WINDOW_SECONDS - 1)) is False
+
+
+# --- recalling superseded cards ---------------------------------------------
+#
+# A board that redraws every turn used to leave one card per move on screen.
+# Now each session remembers the message it last sent and retires it when the
+# replacement is up.
+
+def _hub_for_recall(recall_ok=True, sent_ids=("M1", "M2", "M3")):
+    """A minimal object carrying just the mixin machinery under test."""
+    import time
+    from types import SimpleNamespace
+
+    from qqofficial_hub.ephemeral_routes import EphemeralCardMixin
+
+    hub = object.__new__(EphemeralCardMixin)
+    hub.recall_superseded_cards = True
+    hub._session_message_table = {}
+    hub.recalled = []
+
+    async def recall_message(origin, message_id, client=None, sent_at=None):
+        hub.recalled.append((message_id, sent_at))
+        return recall_ok
+
+    hub.recall_message = recall_message
+    return hub, time
+
+
+def test_a_session_remembers_the_message_it_last_sent():
+    hub, _ = _hub_for_recall()
+    assert hub._session_messages == {}
+    hub._session_messages["S1"] = ("M1", 1000.0)
+    assert hub._session_messages["S1"][0] == "M1"
+
+
+def test_the_superseded_card_is_recalled_with_its_own_send_time():
+    """Passing sent_at lets the Hub skip a request that cannot succeed."""
+    async def scenario():
+        hub, _ = _hub_for_recall()
+        await hub._recall_quietly("p:GroupMessage:G1", ("M1", 1234.0))
+        assert hub.recalled == [("M1", 1234.0)]
+    asyncio.run(scenario())
+
+
+def test_a_failing_recall_never_propagates():
+    """The replacement card already went out; tidy-up must not undo that."""
+    async def scenario():
+        hub, _ = _hub_for_recall()
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("QQ 拒绝")
+
+        hub.recall_message = boom
+        await hub._recall_quietly("p:GroupMessage:G1", ("M1", 1234.0))
+    asyncio.run(scenario())
+
+
+def test_message_id_is_read_from_whatever_shape_qq_returns():
+    from types import SimpleNamespace
+
+    from qqofficial_hub.ephemeral_routes import EphemeralCardMixin
+
+    extract = EphemeralCardMixin._extract_message_id
+    assert extract({"id": "A"}) == "A"
+    assert extract({"msg_id": "B"}) == "B"
+    assert extract(SimpleNamespace(message_id="C")) == "C"
+    assert extract(None) == ""
+    assert extract({}) == ""

@@ -5,6 +5,11 @@
     "type": "int",
     "default": 24
   },
+  "recall_superseded_cards": {
+    "description": "同一会话发出新卡片/新棋盘后，自动撤回它替代的那一条，避免长对局刷屏。QQ 仅允许撤回 2 分钟内的消息，超时会静默跳过。",
+    "type": "bool",
+    "default": true
+  },
   "experimental_interaction_bridge": {
     "description": "启用 QQ Official Interaction 兼容桥",
     "hint": "启用或关闭后必须完整重启 AstrBot。桥接 interaction intent、回调去重和 ACK；不修改磁盘中的 AstrBot 源码。若当前 AppID 无 Interaction Intent 权限，请关闭后重启。",

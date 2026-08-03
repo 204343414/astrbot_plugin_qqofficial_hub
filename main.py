@@ -31,7 +31,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.15.3", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.16.0", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -71,6 +71,9 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         self.empty_mention_opens_panel = bool(config.get("empty_mention_opens_panel", True))
         self.bridge_generation: int | None = None
         self._card_providers: dict[str, Any] = {}
+        self.recall_superseded_cards = bool(
+            config.get("recall_superseded_cards", True)
+        )
         self.require_known_clicker = bool(config.get("require_known_clicker", True))
         self.show_clicker_name = bool(config.get("show_clicker_name", True))
         self.identities = identity.IdentityBook(self.store)

@@ -45,6 +45,13 @@ MAX_PASSIVE_REPLIES_PER_EVENT = 5
 MEDIA_UPLOAD_ATTEMPTS = 3
 MEDIA_UPLOAD_BACKOFF_SECONDS = 0.6
 
+#: QQ refuses to recall a message older than two minutes:
+#: DELETE /v2/groups/{group_openid}/messages/{message_id}
+#: "发送超出2分钟的消息不可撤回". Checked locally before spending a request, with a
+#: safety margin because our clock and QQ's are not the same clock.
+RECALL_WINDOW_SECONDS = 120
+RECALL_SAFETY_MARGIN_SECONDS = 5
+
 _msg_seq_counter = itertools.count(1)
 
 
@@ -286,3 +293,59 @@ async def send_passive(
         sent += 1
 
     return sent
+
+
+async def recall_message(
+    client: Any,
+    message_id: str,
+    *,
+    group_openid: str = "",
+    user_openid: str = "",
+) -> bool:
+    """Recall one message the bot sent. True when QQ accepted it.
+
+    botpy 1.2.1 only ships ``recall_message`` for *guild* channels
+    (``DELETE /channels/{channel_id}/messages/{message_id}``); there is no
+    group or C2C helper, so the v2 route is built by hand here:
+
+        DELETE /v2/groups/{group_openid}/messages/{message_id}
+        DELETE /v2/users/{openid}/messages/{message_id}
+
+    Failure is reported rather than raised. A recall is always a tidiness
+    nicety layered on top of an action that already succeeded -- letting it
+    abort the caller would turn "the board looks messy" into "the move was
+    lost", which is far worse.
+    """
+    from botpy.http import Route
+
+    message_id = real_msg_id(message_id)
+    if not message_id:
+        return False
+    if user_openid:
+        route = Route("DELETE", "/v2/users/{openid}/messages/{message_id}",
+                      openid=user_openid, message_id=message_id)
+    elif group_openid:
+        route = Route("DELETE",
+                      "/v2/groups/{group_openid}/messages/{message_id}",
+                      group_openid=group_openid, message_id=message_id)
+    else:
+        return False
+
+    try:
+        await client.api._http.request(route)
+        return True
+    except Exception as exc:
+        # Expected often enough to be routine: past the two-minute window, or
+        # a message somebody already removed. Never louder than a debug line.
+        logger.debug("[QQHub] Recall of %s failed: %s", message_id[-8:], exc)
+        return False
+
+
+def within_recall_window(sent_at: float, now: float | None = None) -> bool:
+    """Whether a message sent at ``sent_at`` can still be recalled."""
+    import time
+
+    now = time.time() if now is None else now
+    return (now - float(sent_at or 0)) <= (
+        RECALL_WINDOW_SECONDS - RECALL_SAFETY_MARGIN_SECONDS
+    )

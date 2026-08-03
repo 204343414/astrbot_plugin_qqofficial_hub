@@ -309,3 +309,21 @@ class GroupMessage(BaseMessage):
 **结论**：群聊里无法显示用户昵称，只能用稳定占位名。任何"从群消息取 username"的
 写法都会永远得到空串——AstrBot 适配器里的
 `getattr(message.author, "username", "")` 即是如此。
+
+## 撤回消息
+
+| 场景 | 路由 |
+| --- | --- |
+| 群聊 | `DELETE /v2/groups/{group_openid}/messages/{message_id}` |
+| 单聊 | `DELETE /v2/users/{openid}/messages/{message_id}` |
+| 子频道 | `DELETE /channels/{channel_id}/messages/{message_id}`（botpy 有 `recall_message`） |
+
+- **发送超出 2 分钟的消息不可撤回**（官方原文）。
+- 只能撤回**机器人自己发的**消息。
+- 成功返回 HTTP 200。
+- **botpy 1.2.1 只实现了子频道版本**（`api.py: recall_message` 走 `/channels/...`），
+  群聊与单聊没有封装，必须自己拼 `Route`。Hub 的 `passive_reply.recall_message()`
+  已经做了这件事。
+- 撤回**不占用**主动消息配额，也不消耗被动回复的 5 条预算（它不是发消息）。
+
+文档：https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/send-receive/reset.html

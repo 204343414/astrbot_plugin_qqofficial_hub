@@ -6,13 +6,20 @@ and configuration. See ``docs/EPHEMERAL_CARDS.md`` for the contract.
 from __future__ import annotations
 
 import base64
+import time
 from typing import Any
 
 from astrbot.api import logger
 
 from .action_registry import ActionContext, EphemeralContext
 from . import ephemeral
-from .passive_reply import next_msg_seq, passive_event_id, real_msg_id
+from .passive_reply import (
+    next_msg_seq,
+    passive_event_id,
+    real_msg_id,
+    recall_message,
+    within_recall_window,
+)
 
 
 class EphemeralCardMixin:
@@ -168,6 +175,25 @@ class EphemeralCardMixin:
                 return str(value)
         return ""
 
+    async def recall_message(self, origin: str, message_id: str,
+                             client: Any = None, sent_at: float | None = None) -> bool:
+        """Recall a message this bot sent. Public API for game/flow plugins.
+
+        Returns False instead of raising: a failed recall must never break the
+        thing it was tidying up after. QQ only allows this within two minutes
+        of sending, so pass ``sent_at`` to skip a request that cannot succeed.
+        """
+        if sent_at is not None and not within_recall_window(sent_at):
+            return False
+        client = client or self._get_qq_client(origin)
+        if client is None:
+            return False
+        if "GroupMessage" in origin:
+            return await recall_message(
+                client, message_id, group_openid=origin.split(":", 2)[-1])
+        return await recall_message(
+            client, message_id, user_openid=origin.split(":", 2)[-1])
+
     async def send_ephemeral_card(
         self,
         origin: str,
@@ -215,8 +241,53 @@ class EphemeralCardMixin:
             payload["msg_id"] = msg_id
         elif event_id:
             payload["event_id"] = event_id
-        await client.api.post_group_message(**payload)
+        previous = self._session_messages.get(session_id)
+        result = await client.api.post_group_message(**payload)
+
+        sent_id = self._extract_message_id(result)
+        if sent_id:
+            self._session_messages[session_id] = (sent_id, time.time())
+        # One session is one conversation: a board that redraws every turn, or
+        # a flow moving to its next step. Leaving every superseded card on
+        # screen is what makes these games feel like spam, so retire the one
+        # this replaces -- after the new card is up, never before.
+        if previous and self.recall_superseded_cards:
+            await self._recall_quietly(origin, previous, client)
         return session_id
+
+    @property
+    def _session_messages(self) -> dict[str, tuple[str, float]]:
+        """session_id -> (message id, sent at). In memory on purpose.
+
+        QQ refuses recalls older than two minutes, so nothing here outlives a
+        restart in any useful way and persisting it would only add a file to
+        keep consistent.
+        """
+        table = getattr(self, "_session_message_table", None)
+        if table is None:
+            table = {}
+            self._session_message_table = table
+        return table
+
+    @staticmethod
+    def _extract_message_id(result: Any) -> str:
+        for attr in ("id", "msg_id", "message_id"):
+            value = getattr(result, attr, None) or (
+                result.get(attr) if isinstance(result, dict) else None
+            )
+            if value:
+                return str(value)
+        return ""
+
+    async def _recall_quietly(self, origin: str, previous: tuple[str, float],
+                              client: Any = None) -> None:
+        """Best-effort tidy-up. Never raises: the new card already went out."""
+        message_id, sent_at = previous
+        try:
+            await self.recall_message(origin, message_id,
+                                      client=client, sent_at=sent_at)
+        except Exception:
+            logger.debug("[QQHub] Failed to recall a superseded card")
 
     def register_card_provider(self, card_id: str, provider: Any) -> None:
         """Register a builder for a ``next_card`` target.
