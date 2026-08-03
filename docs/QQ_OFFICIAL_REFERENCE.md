@@ -290,3 +290,22 @@ Interaction(self.api, payload.get('id'), payload.get('d', {}))
 **同类型多账号无法用它区分**（两个 `qq_official` 会同时命中）。此时应按
 `event.get_platform_id()`（如 `default_102824564`）自行判断，或依赖以
 `平台ID:...` 为前缀的数据分片。
+
+
+## 12. 群场景拿不到昵称（botpy 1.2.1 核实）
+
+```python
+class GroupMessage(BaseMessage):
+    class _User:
+        def __init__(self, data):
+            self.member_openid = data.get("member_openid", None)   # 仅此一项
+```
+
+- 群消息事件的 `author` **没有** `username`；
+- `INTERACTION_CREATE` 只有 `group_member_openid`；
+- `botpy.BotAPI` 里 `get_guild_member` / `get_guild_members` 等**全部是频道接口**，
+  不存在「按 group_openid + member_openid 查昵称」的能力。
+
+**结论**：群聊里无法显示用户昵称，只能用稳定占位名。任何"从群消息取 username"的
+写法都会永远得到空串——AstrBot 适配器里的
+`getattr(message.author, "username", "")` 即是如此。

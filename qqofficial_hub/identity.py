@@ -2,18 +2,22 @@
 
 Why this exists
 ---------------
-``INTERACTION_CREATE`` carries only ``group_member_openid`` -- an opaque hex
-string, never a nickname. A nickname is available *only* on
-``GROUP_AT_MESSAGE_CREATE`` (``message.author.username``). So the only way to
-show "who pressed this" is to remember the name from the last time that person
-actually talked to the bot.
+QQ **never sends a nickname in the group scene**. Verified against botpy 1.2.1:
+``GroupMessage._User`` has exactly one field, ``member_openid``. There is no
+``username``, and the API exposes no group-member lookup either (every
+``get_*_member`` endpoint is guild-only). ``INTERACTION_CREATE`` likewise
+carries only ``group_member_openid``.
 
-That same fact doubles as an anti-abuse gate: a stranger who has never spoken
-to the bot cannot be named, and is therefore not allowed to drive interactive
-cards. Someone spamming a group's game only needs one click otherwise.
+So this book cannot invent names out of thin air. What it *can* do:
 
-Names are refreshed on **every** inbound message, so a rename is picked up the
-next time that person speaks rather than being frozen forever.
+* record that an OpenID has spoken to the bot at least once, which is the
+  anti-abuse gate behind ``require_known_clicker``;
+* store a name when one is genuinely available -- the C2C/guild scenes do
+  provide ``username``, and a plugin may set a nickname explicitly via
+  :meth:`IdentityBook.remember`.
+
+When no name is known the display falls back to a stable short label rather
+than an opaque hex string, because showing a raw OpenID looks like a bug.
 """
 from __future__ import annotations
 
@@ -55,17 +59,29 @@ def looks_like_openid(value: str) -> bool:
     )
 
 
+#: Stable, friendly placeholders. QQ gives no nickname in groups, so most
+#: players will be shown one of these plus a short suffix. Picked by hashing
+#: the OpenID so the same person keeps the same word within a group.
+ANONYMOUS_WORDS = (
+    "玩家", "旅人", "路人", "访客", "同学", "朋友", "邻座", "对手",
+)
+
+
 def display_label(name: str, openid: str) -> str:
     """A human-readable label, never a raw OpenID.
 
-    Falls back to a short suffix so logs and cards can still distinguish two
-    unknown users without exposing the full identifier.
+    QQ does not provide nicknames in the group scene, so this usually returns
+    a friendly placeholder. It is deterministic: the same OpenID always maps to
+    the same word, which lets players tell each other apart in a match.
     """
     cleaned = normalize_name(name)
     if cleaned and not looks_like_openid(cleaned):
         return cleaned
-    tail = str(openid or "")[-4:]
-    return f"未知用户…{tail}" if tail else "未知用户"
+    openid = str(openid or "")
+    if not openid:
+        return "某人"
+    word = ANONYMOUS_WORDS[sum(openid.encode()) % len(ANONYMOUS_WORDS)]
+    return f"{word}{openid[-4:]}"
 
 
 class IdentityBook:

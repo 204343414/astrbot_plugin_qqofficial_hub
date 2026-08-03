@@ -137,15 +137,20 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 
 ## 操作者身份与防刷
 
-QQ 的按钮回调事件（`INTERACTION_CREATE`）**只带乱码 OpenID，不带昵称**；昵称只出现在
-入站消息（`GROUP_AT_MESSAGE_CREATE` 的 `author.username`）里。由此有两个配置：
+**QQ 在群场景从不下发昵称。** 已对 botpy 1.2.1 核实：`GroupMessage._User` 只有
+`member_openid` 一个字段，没有 `username`；API 里所有 `get_*_member` 都是频道专用，
+群成员查询接口并不存在。`INTERACTION_CREATE` 同样只有 `group_member_openid`。
+
+因此卡片上显示的是**稳定的友好占位名**（如「玩家9294」「邻座8D09」）：同一人始终同一
+称呼，不同人可区分，且绝不暴露原始 OpenID。只有单聊/频道场景或插件显式调用
+`identities.remember()` 时才会出现真实昵称。
 
 | 配置 | 默认 | 作用 |
 | --- | --- | --- |
 | `require_known_clicker` | 开 | 未曾与机器人说过话的人点击按钮会被拒绝（ACK code 4），防止陌生人一键刷卡卡群 |
 | `show_clicker_name` | 开 | 卡片最顶部加一行「👤 昵称」，表明这张卡属于谁 / 是谁按的。调用 `send_ephemeral_card` 只需传 `initiator_openid`，顶部行会自动生成；传 `clicker_header=""` 可抑制 |
 
-- 昵称在**每次**入站消息时刷新，因此改名会在对方下次说话后自动更新；
+- 若确有昵称来源（单聊、频道、或插件主动写入），每次入站消息都会刷新，改名自动生效；
 - 显示为**纯文本**而非蓝色 @ —— 实测 QQ 群主动消息路径会把 At 标签原样显示；
 - 昵称会去除换行与 Markdown 字符，避免破坏卡片排版；
 - 身份**按群隔离**，不跨群继承；30 天未出现即遗忘。

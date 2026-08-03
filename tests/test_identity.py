@@ -35,12 +35,22 @@ def test_openid_is_never_shown_as_a_name():
     assert identity.looks_like_openid(ALICE)
     label = identity.display_label(ALICE, ALICE)
     assert ALICE not in label, "不得把 OpenID 当昵称显示"
-    assert label.startswith("未知用户")
+    assert any(word in label for word in identity.ANONYMOUS_WORDS)
 
 
-def test_display_label_falls_back_to_a_short_suffix():
+def test_display_label_falls_back_to_a_friendly_placeholder():
+    """QQ never sends nicknames in groups, so this is the common path."""
     label = identity.display_label("", ALICE)
-    assert label == "未知用户…9294"
+    assert ALICE not in label
+    assert label.endswith("9294")
+    assert any(word in label for word in identity.ANONYMOUS_WORDS)
+
+
+def test_placeholder_is_stable_and_distinguishes_people():
+    a = identity.display_label("", ALICE)
+    assert a == identity.display_label("", ALICE), "同一人应始终同一称呼"
+    other = "BE4A096E28B40FEDEB3320E5E8D7C2A7"
+    assert identity.display_label("", other) != a, "不同人应可区分"
 
 
 def test_real_name_is_used_when_known():
@@ -66,7 +76,8 @@ def test_speaking_without_a_nickname_still_counts_as_known():
         await store.bootstrap()
         await book.remember(ORIGIN, ALICE, "")
         assert await book.is_known(ORIGIN, ALICE)
-        assert (await book.label_for(ORIGIN, ALICE)).startswith("未知用户")
+        label = await book.label_for(ORIGIN, ALICE)
+        assert ALICE not in label and label.endswith("9294")
     asyncio.run(scenario())
 
 
@@ -147,3 +158,14 @@ def test_empty_header_can_still_be_forced():
     from qqofficial_hub.ephemeral_routes import EphemeralCardMixin
     source = inspect.getsource(EphemeralCardMixin.send_ephemeral_card)
     assert "if clicker_header is None:" in source, "显式传 '' 应能抑制顶部行"
+
+
+def test_group_scene_provides_no_nickname_by_design():
+    """Documented reality check, verified against botpy 1.2.1.
+
+    GroupMessage._User exposes only ``member_openid`` -- no ``username`` -- and
+    every member-lookup endpoint in the API is guild-only. Any code that expects
+    a group nickname from QQ is built on a false premise.
+    """
+    doc = identity.__doc__ or ""
+    assert "never sends a nickname in the group scene" in doc
