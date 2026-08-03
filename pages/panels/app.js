@@ -484,6 +484,18 @@ function renderDiagnostics(report) {
         ["处理的类型", (bridge.handled_types || []).join(", ")],
       ]));
 
+  const ident = report.identities || {};
+  host.append(diagEl("h3", {}, "身份台账"));
+  host.append(diagEl("p", { className: "hint" },
+    "seen = 与机器人说过话的人数；named = 其中拿到昵称的人数。若 named 长期为 0，说明平台没有下发昵称，需要用户 /我叫 自报。"));
+  host.append(ident.error
+    ? diagEl("p", { className: "diag-bad" }, ident.error)
+    : diagTable(["项目", "值"], [
+        ["已记录用户", String(ident.seen ?? 0)],
+        ["其中有昵称", String(ident.named ?? 0)],
+        ["昵称示例", (ident.samples || []).join("、") || "（无）"],
+      ]));
+
   host.append(diagEl("h3", {}, "模块与 API"));
   host.append(diagTable(["模块", "状态"],
     (report.modules || []).map((m) => [diagEl("code", {}, m.name),

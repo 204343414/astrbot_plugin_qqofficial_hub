@@ -142,23 +142,15 @@ def test_identity_survives_reload():
 def test_header_is_derived_automatically_when_not_supplied():
     """A game plugin only passes initiator_openid; the header must be free.
 
-    Requiring every caller to build the header by hand is why the tic-tac-toe
-    board never showed one.
+    Checked statically: importing ephemeral_routes needs AstrBot, absent here.
     """
-    import inspect
-    from qqofficial_hub.ephemeral_routes import EphemeralCardMixin
-
-    sig = inspect.signature(EphemeralCardMixin.send_ephemeral_card)
-    default = sig.parameters["clicker_header"].default
-    assert default is None, "默认应为 None 以便自动推导，而不是空字符串"
-    source = inspect.getsource(EphemeralCardMixin.send_ephemeral_card)
+    from pathlib import Path
+    source = Path(__file__).parents[1].joinpath(
+        "qqofficial_hub/ephemeral_routes.py").read_text("utf-8")
+    assert "clicker_header: str | None = None" in source, (
+        "默认应为 None 以便自动推导，而不是空字符串"
+    )
     assert "_clicker_header(origin, initiator_openid)" in source
-
-
-def test_empty_header_can_still_be_forced():
-    import inspect
-    from qqofficial_hub.ephemeral_routes import EphemeralCardMixin
-    source = inspect.getsource(EphemeralCardMixin.send_ephemeral_card)
     assert "if clicker_header is None:" in source, "显式传 '' 应能抑制顶部行"
 
 
@@ -215,3 +207,42 @@ def test_plain_message_never_wipes_a_declared_name():
         await book.remember(ORIGIN, ALICE, "")
         assert await book.name_of(ORIGIN, ALICE) == "小明"
     asyncio.run(scenario())
+
+
+def test_raw_payload_fallback_finds_a_nickname():
+    """AstrBot reads author.username; older/newer botpy may name it otherwise.
+
+    The bot's own log prints "name/id" only when get_sender_name() is non-empty,
+    so if a name shows up there it must be reachable from the payload too.
+    """
+    import ast
+    from pathlib import Path
+    source = Path(__file__).parents[1].joinpath("main.py").read_text("utf-8")
+    tree = ast.parse(source)
+    func = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "_nickname_from_raw"
+    )
+    func.decorator_list = []
+    ns: dict = {"AstrMessageEvent": object}
+    exec(compile(ast.Module([func], []), "<x>", "exec"), ns)
+    extract = ns["_nickname_from_raw"]
+
+    class Author:
+        nickname = "小明"
+
+    class Raw:
+        author = Author()
+
+    class Msg:
+        raw_message = Raw()
+
+    class Event:
+        message_obj = Msg()
+
+    assert extract(Event()) == "小明"
+
+    class Empty:
+        message_obj = None
+
+    assert extract(Empty()) == ""

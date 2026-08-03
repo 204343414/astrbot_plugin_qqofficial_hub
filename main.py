@@ -31,7 +31,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.14.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.14.1", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -102,17 +102,48 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         platform = self.context.get_platform_inst(platform_id)
         if platform is not None and platform.meta().name == "qq_official":
             await self.store.observe_group(origin, platform_id)
-            # A nickname is only ever available on inbound messages;
-            # INTERACTION_CREATE has none. Refresh on every message so a
+            # Nicknames only ever arrive on inbound messages; a button click
+            # (INTERACTION_CREATE) carries none. Refresh on every message so a
             # rename is picked up the next time the user speaks.
+            sender_id = str(event.get_sender_id() or "")
+            sender_name = str(event.get_sender_name() or "")
+            if not sender_name:
+                # Some adapter versions expose the nickname only on the raw
+                # payload. Dig it out rather than losing the one chance we get.
+                sender_name = self._nickname_from_raw(event)
             try:
-                await self.identities.remember(
-                    origin,
-                    str(event.get_sender_id() or ""),
-                    str(event.get_sender_name() or ""),
+                changed = await self.identities.remember(
+                    origin, sender_id, sender_name
                 )
+                if changed and sender_name:
+                    logger.info(
+                        "[QQHub] Learned nickname for %s: %s",
+                        sender_id[-6:], sender_name,
+                    )
             except Exception as exc:
                 logger.debug("[QQHub] Cannot record identity: %s", exc)
+
+    @staticmethod
+    def _nickname_from_raw(event: AstrMessageEvent) -> str:
+        """Last-resort nickname extraction from the platform payload.
+
+        AstrBot reads ``author.username``; depending on the botpy version that
+        attribute may be missing while the underlying JSON still carries a
+        display name under a different key.
+        """
+        raw = getattr(getattr(event, "message_obj", None), "raw_message", None)
+        author = getattr(raw, "author", None)
+        for attr in ("username", "nickname", "user_name", "name", "card"):
+            value = str(getattr(author, attr, "") or "").strip()
+            if value:
+                return value
+        payload = getattr(author, "__dict__", None)
+        if isinstance(payload, dict):
+            for attr in ("username", "nickname", "user_name", "name", "card"):
+                value = str(payload.get(attr) or "").strip()
+                if value:
+                    return value
+        return ""
 
     @filter.platform_adapter_type(
         filter.PlatformAdapterType.QQOFFICIAL

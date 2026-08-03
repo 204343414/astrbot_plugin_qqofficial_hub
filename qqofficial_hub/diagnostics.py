@@ -150,6 +150,27 @@ def bridge_report(plugin: Any) -> dict[str, Any]:
     }
 
 
+async def identity_report(store: Any) -> dict[str, Any]:
+    """Who the Hub can actually name.
+
+    Makes the "why is it still an OpenID" question answerable without reading
+    logs: if `named` is 0 while `seen` is high, no nickname is reaching us.
+    """
+    import time
+    raw = getattr(store, "_data", {}) or {}
+    now = int(time.time())
+    entries = [
+        item for item in (raw.get("identities", {}) or {}).values()
+        if isinstance(item, dict) and int(item.get("expires_at", 0)) > now
+    ]
+    named = [item for item in entries if str(item.get("name") or "").strip()]
+    return {
+        "seen": len(entries),
+        "named": len(named),
+        "samples": [str(item.get("name")) for item in named[:5]],
+    }
+
+
 async def storage_report(store: Any) -> dict[str, Any]:
     """Live counts from the state file, so stale data is visible."""
     import time
@@ -187,6 +208,10 @@ async def build_report(plugin: Any) -> dict[str, Any]:
             report[key] = build()
         except Exception as exc:  # pragma: no cover - defensive
             report[key] = {"error": f"{type(exc).__name__}: {exc}"}
+    try:
+        report["identities"] = await identity_report(plugin.store)
+    except Exception as exc:  # pragma: no cover - defensive
+        report["identities"] = {"error": f"{type(exc).__name__}: {exc}"}
     try:
         report["storage"] = await storage_report(plugin.store)
     except Exception as exc:  # pragma: no cover - defensive
