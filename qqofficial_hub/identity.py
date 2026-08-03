@@ -107,8 +107,27 @@ class IdentityBook:
             return False
         cleaned = normalize_name(name)
         return await self._store.remember_identity(
-            self.key(origin, openid), cleaned, self.ttl_seconds
+            self.key(origin, openid),
+            cleaned,
+            self.ttl_seconds,
+            # QQ sends an empty nickname on every group message; that must not
+            # wipe a name the user set with /我叫.
+            keep_existing_name=True,
         )
+
+    async def set_name(self, origin: str, openid: str, name: str) -> str:
+        """Explicitly set a self-declared display name.
+
+        Unlike :meth:`remember`, an empty value here *clears* the name, so a
+        user can withdraw it and fall back to the anonymous placeholder.
+        """
+        cleaned = normalize_name(name)
+        if cleaned and looks_like_openid(cleaned):
+            raise ValueError("昵称不能是一串十六进制 ID")
+        await self._store.remember_identity(
+            self.key(origin, str(openid or "").strip()), cleaned, self.ttl_seconds
+        )
+        return cleaned
 
     async def lookup(self, origin: str, openid: str) -> dict[str, Any] | None:
         openid = str(openid or "").strip()

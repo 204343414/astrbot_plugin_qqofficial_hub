@@ -357,8 +357,14 @@ class PanelStore:
                     return copy.deepcopy(item)
             return None
 
-    async def remember_identity(self, key: str, name: str, ttl_seconds: int) -> bool:
-        """Store the latest nickname for an OpenID. True when it changed."""
+    async def remember_identity(
+        self, key: str, name: str, ttl_seconds: int, keep_existing_name: bool = False
+    ) -> bool:
+        """Store the latest nickname for an OpenID. True when it changed.
+
+        ``keep_existing_name`` protects a self-declared name from being wiped by
+        the empty nickname QQ sends on every group message.
+        """
         import time
         from . import identity
         now = int(time.time())
@@ -373,6 +379,8 @@ class PanelStore:
                 )[: len(table) - identity.MAX_ENTRIES]:
                     table.pop(stale, None)
             prior = table.get(key) if isinstance(table.get(key), dict) else {}
+            if keep_existing_name and not str(name):
+                name = str(prior.get("name") or "")
             changed = str(prior.get("name") or "") != str(name)
             table[key] = {
                 "name": str(name),

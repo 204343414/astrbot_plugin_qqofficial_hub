@@ -1,5 +1,7 @@
 """Identity book: names come only from messages, and gate button access."""
 import asyncio
+
+import pytest
 import tempfile
 import time
 from pathlib import Path
@@ -169,3 +171,47 @@ def test_group_scene_provides_no_nickname_by_design():
     """
     doc = identity.__doc__ or ""
     assert "never sends a nickname in the group scene" in doc
+
+
+# --- self-declared nicknames -------------------------------------------------
+
+def test_self_declared_name_overrides_the_placeholder():
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.remember(ORIGIN, ALICE, "")          # what QQ actually gives
+        assert (await book.label_for(ORIGIN, ALICE)) != "小明"
+        assert await book.set_name(ORIGIN, ALICE, " 小明 ") == "小明"
+        assert await book.label_for(ORIGIN, ALICE) == "小明"
+    asyncio.run(scenario())
+
+
+def test_self_declared_name_can_be_cleared():
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.set_name(ORIGIN, ALICE, "小明")
+        assert await book.set_name(ORIGIN, ALICE, "") == ""
+        label = await book.label_for(ORIGIN, ALICE)
+        assert label and ALICE not in label
+    asyncio.run(scenario())
+
+
+def test_cannot_impersonate_an_openid():
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        with pytest.raises(ValueError):
+            await book.set_name(ORIGIN, ALICE, ALICE)
+    asyncio.run(scenario())
+
+
+def test_plain_message_never_wipes_a_declared_name():
+    """QQ sends an empty nickname on every group message."""
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.set_name(ORIGIN, ALICE, "小明")
+        await book.remember(ORIGIN, ALICE, "")
+        assert await book.name_of(ORIGIN, ALICE) == "小明"
+    asyncio.run(scenario())

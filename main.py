@@ -239,6 +239,40 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         filter.PlatformAdapterType.QQOFFICIAL
         | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
     )
+    @filter.command("我叫", alias={"设置昵称", "改名"}, priority=100)
+    async def set_display_name(self, event: AstrMessageEvent, name: str = ""):
+        """/我叫 小明 —— 自报昵称，用于卡片署名。
+
+        QQ Official 不向机器人提供群昵称（事件里只有 member_openid），所以这是
+        唯一可靠的来源。
+        """
+        event.stop_event()
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        if "GroupMessage" not in origin:
+            yield event.plain_result("请在群聊中使用。")
+            return
+        openid = str(event.get_sender_id() or "")
+        wanted = str(name or "").strip()
+        if not wanted:
+            current = await self.identities.name_of(origin, openid)
+            yield event.plain_result(
+                f"你当前的昵称是「{current}」。发送 /我叫 新名字 可修改。"
+                if current else "你还没有设置昵称。发送 /我叫 小明 即可设置。"
+            )
+            return
+        try:
+            saved = await self.identities.set_name(origin, openid, wanted)
+        except ValueError as exc:
+            yield event.plain_result(f"设置失败：{exc}")
+            return
+        yield event.plain_result(
+            f"已记住，之后卡片会显示「{saved}」。" if saved else "已清除你的昵称。"
+        )
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
     @filter.command("qqhub", priority=100)
     async def send_default_panel(self, event: AstrMessageEvent):
         """发送当前群配置的 QQ 官方 Hub 面板。"""
