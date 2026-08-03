@@ -266,3 +266,16 @@ def test_hub_exposes_an_image_send_that_returns_the_message_id():
     body = body[: body.index("async def send_ephemeral_card")]
     assert 'for attr in ("id", "msg_id", "message_id")' in body, "应回传消息 id"
     assert "IMAGE_FILE_TYPE" in body
+
+
+def test_panel_hint_yields_to_quoted_replies():
+    """A quoted reply belongs to whatever produced the quoted message.
+
+    The catch-all hint runs at priority=100 and calls stop_event(), which
+    swallowed picture-board game moves before the game ever saw them.
+    """
+    source = Path(__file__).parents[1].joinpath("main.py").read_text("utf-8")
+    handler = source[source.index("async def show_panel_hint_when_llm_disabled"):]
+    handler = handler[: handler.index("async def _send_panel_from_event")]
+    assert 'endswith("Reply")' in handler, "引用消息应让路给游戏/表单等"
+    assert handler.index('endswith("Reply")') < handler.index("event.stop_event()")

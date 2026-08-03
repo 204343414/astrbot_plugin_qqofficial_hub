@@ -31,7 +31,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.15.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.15.1", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -213,6 +213,14 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         # immutable AstrBotMessage copy as well. Synthetic Type 1 commands are
         # explicitly marked because their raw Interaction has no text content.
         if event.get_extra("qqhub_synthetic_command", False):
+            return
+        # A quoted reply is almost always aimed at whatever produced the quoted
+        # message -- a game board, a form, another plugin's card. Swallowing it
+        # with the generic panel hint made picture-board games unplayable.
+        if any(
+            str(getattr(component, "type", "")).endswith("Reply")
+            for component in (getattr(event.message_obj, "message", None) or [])
+        ):
             return
         original_text = str(
             getattr(getattr(event, "message_obj", None), "message_str", "") or ""
