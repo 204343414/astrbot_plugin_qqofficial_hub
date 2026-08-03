@@ -19,6 +19,7 @@ Constraints encoded here (from the official docs):
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import itertools
 import os
@@ -35,6 +36,14 @@ FILE_FILE_TYPE = 4
 
 # Docs: a passive reply may be used at most 5 times per event.
 MAX_PASSIVE_REPLIES_PER_EVENT = 5
+
+#: botpy raises ServerError *only* for HTTP 500 and 504 (see its
+#: ``HttpErrorDict``), i.e. Tencent's own transient failures -- "系统繁忙，请稍后
+#: 重试" is one of them. The official API guide says of this class of error:
+#: "系统错误，一般重试一次会好". An upload that dies this way costs the player their
+#: whole turn, so retry briefly instead of surfacing it.
+MEDIA_UPLOAD_ATTEMPTS = 3
+MEDIA_UPLOAD_BACKOFF_SECONDS = 0.6
 
 _msg_seq_counter = itertools.count(1)
 
@@ -169,11 +178,38 @@ async def _upload_media(
     else:
         return None
 
-    result = await client.api._http.request(route, json=payload)
+    result = await _request_with_retry(client, route, payload)
     if not isinstance(result, dict) or not result.get("file_info"):
         logger.warning("[QQHub] Media upload returned no file_info: %s", str(result)[:200])
         return None
     return result
+
+
+async def _request_with_retry(client: Any, route: Any, payload: dict) -> Any:
+    """POST the upload, retrying Tencent's own 5xx a couple of times.
+
+    Only ``ServerError`` is retried, and that is a deliberate line: botpy maps
+    it exclusively to HTTP 500/504, so it never covers a bad request of ours.
+    A 4xx (wrong openid, oversized file, expired token) is raised immediately --
+    retrying those would just burn time and hide a real bug.
+    """
+    from botpy.errors import ServerError
+
+    last: Exception | None = None
+    for attempt in range(1, MEDIA_UPLOAD_ATTEMPTS + 1):
+        try:
+            return await client.api._http.request(route, json=payload)
+        except ServerError as exc:
+            last = exc
+            if attempt == MEDIA_UPLOAD_ATTEMPTS:
+                break
+            delay = MEDIA_UPLOAD_BACKOFF_SECONDS * attempt
+            logger.warning(
+                "[QQHub] Media upload hit a QQ server error (%s), retrying in %.1fs "
+                "(attempt %d/%d)", exc, delay, attempt, MEDIA_UPLOAD_ATTEMPTS,
+            )
+            await asyncio.sleep(delay)
+    raise last if last is not None else RuntimeError("媒体上传失败")
 
 
 async def send_passive(

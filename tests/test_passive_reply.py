@@ -219,6 +219,113 @@ def test_media_is_uploaded_not_silently_dropped():
     asyncio.run(scenario())
 
 
+# --- surviving Tencent's own 5xx --------------------------------------------
+#
+# "系统繁忙，请稍后重试" arrived mid-game and cost the player their whole turn.
+# botpy raises ServerError only for HTTP 500/504 (its HttpErrorDict), and the
+# official API guide calls this class of error "系统错误，一般重试一次会好".
+
+#: The real botpy source the user runs, so these tests verify its actual error
+#: mapping rather than a stub that could quietly encode a wrong assumption.
+_BOTPY_CANDIDATES = ("/home/user/botpy",)
+
+
+def _botpy_errors():
+    try:
+        import botpy.errors as errors
+    except ModuleNotFoundError:
+        import os
+
+        for root in _BOTPY_CANDIDATES:
+            if os.path.isdir(os.path.join(root, "botpy")):
+                sys.path.insert(0, root)
+                break
+        else:
+            pytest.skip("需要 botpy 才能校验其错误映射")
+        import botpy.errors as errors
+    return errors
+
+
+def _server_error(message="系统繁忙，请稍后重试"):
+    return _botpy_errors().ServerError(msg=message)
+
+
+def _upload_client(responses):
+    """A client whose upload endpoint yields each response/exception in turn."""
+    calls = []
+
+    async def request(route, json=None):
+        calls.append(json)
+        result = responses[len(calls) - 1]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    client = SimpleNamespace(api=SimpleNamespace(_http=SimpleNamespace(request=request)))
+    return client, calls
+
+
+def test_upload_retries_a_transient_qq_server_error():
+    async def scenario():
+        from qqofficial_hub import passive_reply as pr
+
+        client, calls = _upload_client([_server_error(), {"file_info": "FI-1"}])
+        pr.MEDIA_UPLOAD_BACKOFF_SECONDS = 0.0
+        result = await pr._upload_media(
+            client, pr.IMAGE_FILE_TYPE, "base64://QUJD", None, group_openid="G1",
+        )
+        assert result == {"file_info": "FI-1"}, "重试成功后应正常返回"
+        assert len(calls) == 2, "第一次 500 之后应重试"
+    asyncio.run(scenario())
+
+
+def test_upload_gives_up_after_the_documented_number_of_attempts():
+    async def scenario():
+        ServerError = _botpy_errors().ServerError
+
+        from qqofficial_hub import passive_reply as pr
+
+        client, calls = _upload_client([_server_error()] * pr.MEDIA_UPLOAD_ATTEMPTS)
+        pr.MEDIA_UPLOAD_BACKOFF_SECONDS = 0.0
+        with pytest.raises(ServerError):
+            await pr._upload_media(
+                client, pr.IMAGE_FILE_TYPE, "base64://QUJD", None, group_openid="G1",
+            )
+        assert len(calls) == pr.MEDIA_UPLOAD_ATTEMPTS, "不应无限重试"
+    asyncio.run(scenario())
+
+
+def test_upload_does_not_retry_our_own_bad_request():
+    """A 4xx is our bug; retrying it hides the cause and wastes the turn."""
+    async def scenario():
+        ForbiddenError = _botpy_errors().ForbiddenError
+
+        from qqofficial_hub import passive_reply as pr
+
+        client, calls = _upload_client([ForbiddenError(msg="无权限")])
+        pr.MEDIA_UPLOAD_BACKOFF_SECONDS = 0.0
+        with pytest.raises(ForbiddenError):
+            await pr._upload_media(
+                client, pr.IMAGE_FILE_TYPE, "base64://QUJD", None, group_openid="G1",
+            )
+        assert len(calls) == 1, "4xx 必须立刻抛出，不能重试"
+    asyncio.run(scenario())
+
+
+def test_only_server_error_is_treated_as_retryable():
+    """Pin the premise: botpy maps ServerError to 500/504 and nothing else.
+
+    The whole retry policy rests on this. If a future botpy widened
+    ServerError to cover a 4xx, retrying would start hiding our own bugs.
+    """
+    errors = _botpy_errors()
+    retryable = {
+        code for code, cls in errors.HttpErrorDict.items()
+        if cls is errors.ServerError
+    }
+    assert retryable == {500, 504}
+
+
 def test_c2c_uses_post_c2c_message():
     async def scenario():
         from qqofficial_hub import passive_reply as pr

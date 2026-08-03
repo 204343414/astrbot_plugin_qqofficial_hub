@@ -131,6 +131,15 @@ AstrBot v4.26.7 未原生转发 `INTERACTION_CREATE`。实验桥在进程内为 
 > `test_third_party_actions_survive_a_hub_module_reload` 会真的重新 import
 > 一次模块来验证。
 
+### 富媒体上传会自动重试
+
+QQ 偶尔对 `/v2/groups/{group_openid}/files` 返回 HTTP 500「系统繁忙，请稍后重试」。
+botpy 只把 **500/504** 映射成 `ServerError`（见其 `HttpErrorDict`），官方 API 指南
+对这类错误的说明也是「系统错误，一般重试一次会好」，因此 Hub 会退避重试 3 次
+（0.6s / 1.2s）。**4xx 一律立即抛出**——那是调用方自己的 bug，重试只会掩盖原因。
+
+对图片棋盘类插件这很关键：一次上传失败等于吃掉玩家的一整手棋。
+
 ## 一次性卡片（流程 / 游戏）
 
 除「每群一张、改版即失效」的配置面板外，Hub 还提供**一次性卡片**：由其他插件
