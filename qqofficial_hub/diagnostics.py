@@ -253,3 +253,75 @@ async def build_report(plugin: Any) -> dict[str, Any]:
         and all(a.get("present") for a in api if isinstance(a, dict))
     )
     return report
+
+
+def format_report(report: dict[str, Any]) -> str:
+    """Condense the report into one chat message.
+
+    QQ Official counts every reply against a tight quota, so a diagnostic that
+    needs three messages is a diagnostic people stop running. Failures are
+    spelled out; healthy sections collapse to a count.
+    """
+    lines: list[str] = []
+
+    modules = [m for m in (report.get("modules") or []) if isinstance(m, dict)]
+    broken = [m for m in modules if not m.get("ok")]
+    lines.append(
+        f"模块 {len(modules) - len(broken)}/{len(modules)}"
+        + ("" if not broken else
+           " ✗ " + "，".join(f"{m['name']}: {m['error']}" for m in broken))
+    )
+
+    api = [a for a in (report.get("api") or []) if isinstance(a, dict)]
+    missing = [a["name"] for a in api if not a.get("present")]
+    lines.append(
+        f"接口 {len(api) - len(missing)}/{len(api)}"
+        + ("" if not missing else " ✗ 缺 " + "，".join(missing))
+    )
+
+    actions = report.get("actions") or {}
+    owners = [o for o in (actions.get("owners") or []) if o.get("external")]
+    lines.append(
+        f"Action {actions.get('total', 0)} 个"
+        + (f"，外部插件 {len(owners)} 个：" + "，".join(
+            f"{o['owner'].split('.')[-1]}×{len(o['actions'])}" for o in owners)
+           if owners else "，无外部插件")
+    )
+
+    providers = report.get("providers") or []
+    lines.append(f"卡片提供者 {len(providers)} 个")
+
+    bridge = report.get("bridge") or {}
+    lines.append(
+        "交互桥 " + ("已装载" if bridge.get("installed") else
+                    "已开启但未装载" if bridge.get("enabled") else "未开启")
+    )
+
+    host = report.get("image_host") or {}
+    if host.get("error"):
+        lines.append(f"图床 ✗ {host['error']}")
+    else:
+        detail = f"，图 {host.get('stored_images', 0)} 张"
+        # Fetch counters are the only proof the public side actually works:
+        # publishing succeeds locally whether or not anyone can reach us.
+        hits = int(host.get("hits", 0) or 0)
+        detail += f"，被抓取 {hits} 次" if hits else "，尚未被抓取"
+        lines.append(f"图床 {host.get('hint', '?')}{detail}")
+        if host.get("base_url"):
+            lines.append(f"　└ {host['base_url']}")
+
+    storage = report.get("storage") or {}
+    lines.append(
+        f"存量 群 {storage.get('observed_groups', 0)}"
+        f"／临时卡 {storage.get('ephemeral_cards_live', 0)} 活"
+        f"／会话 {storage.get('ephemeral_sessions_live', 0)}"
+    )
+
+    identities = report.get("identities") or {}
+    lines.append(
+        f"身份 见过 {identities.get('seen', 0)} 人"
+        f"／有昵称 {identities.get('named', 0)} 人"
+    )
+
+    head = "✅ Hub 自检通过" if report.get("healthy") else "⚠️ Hub 自检有问题"
+    return head + "\n" + "\n".join(lines)

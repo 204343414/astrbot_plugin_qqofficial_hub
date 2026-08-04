@@ -65,6 +65,16 @@ class _Entry:
     created_at: float
     #: Set when superseded; the file is deleted once this passes.
     expires_at: float | None = None
+    #: How many times this image was actually fetched, and when last.
+    #:
+    #: This is the only honest evidence that the chain works end to end. A
+    #: card can be *sent* successfully while the picture never loads (wrong
+    #: public URL, tunnel down, QQ refusing the host), and nothing in the send
+    #: response says so. A non-zero hit count means Tencent came and took the
+    #: bytes; a zero one after a card was sent means the failure is downstream
+    #: of us, not in the upload.
+    hits: int = 0
+    last_hit_at: float = 0.0
 
 
 class ImageHost:
@@ -92,6 +102,10 @@ class ImageHost:
         self._entries: dict[str, _Entry] = {}
         #: slot key (usually a group origin) -> the token currently live there.
         self._slots: dict[str, str] = {}
+        #: Aggregate fetch counters, kept across sweeps so evidence that the
+        #: chain worked is not lost when the file it refers to is deleted.
+        self._hits = 0
+        self._misses = 0
         self._runner: Any = None
         self._site: Any = None
         self._sweeper: asyncio.Task | None = None
@@ -253,7 +267,11 @@ class ImageHost:
         # Never touch the filesystem with a caller-supplied name: only tokens
         # this process minted are servable, so traversal has nothing to reach.
         if entry is None or not entry.path.exists():
+            self._misses += 1
             raise web.HTTPNotFound()
+        entry.hits += 1
+        entry.last_hit_at = time.time()
+        self._hits += 1
         content_type = "image/png" if name.endswith(".png") else "image/jpeg"
         return web.Response(
             body=entry.path.read_bytes(),
@@ -268,6 +286,8 @@ class ImageHost:
             "ok": True,
             "live": len(self._slots),
             "stored": len(self._entries),
+            "hits": self._hits,
+            "misses": self._misses,
         })
 
     # --- cleanup ------------------------------------------------------------
@@ -324,4 +344,53 @@ class ImageHost:
             "grace_seconds": self.grace_seconds,
             "max_age_seconds": self.max_age_seconds,
             "metrics_endpoint": f"http://{self.metrics_host}:{self.metrics_port}",
+            "hits": self._hits,
+            "misses": self._misses,
+            "last_hit_at": max(
+                (e.last_hit_at for e in self._entries.values()), default=0.0
+            ),
         }
+
+
+def make_probe_png(width: int = 480, height: int = 270,
+                   seed: int | None = None) -> bytes:
+    """A small, obviously-fresh PNG, built without any imaging library.
+
+    Used by the image-host self test. It has to be *visibly different* on
+    every run, otherwise "the picture loaded" cannot be told apart from "QQ
+    is showing me the cached one from last time" -- and that difference is
+    the whole point of the test. The colour is derived from the clock, and
+    the checker size from the same seed, so two consecutive probes never
+    look alike.
+
+    Pure stdlib on purpose: this must work even when Pillow is unavailable,
+    because the diagnostic that only runs on healthy systems is useless.
+    """
+    import struct
+    import zlib
+
+    seed = int(time.time()) if seed is None else int(seed)
+    r = 60 + (seed * 37) % 180
+    g = 60 + (seed * 61) % 180
+    b = 60 + (seed * 97) % 180
+    cell = 15 + (seed % 4) * 10
+
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)  # PNG filter type 0 for this scanline
+        for x in range(width):
+            dark = ((x // cell) + (y // cell)) % 2 == 0
+            if dark:
+                rows += bytes((r, g, b))
+            else:
+                rows += bytes((255 - r // 2, 255 - g // 2, 255 - b // 2))
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return (struct.pack(">I", len(payload)) + tag + payload
+                + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (_PNG_MAGIC
+            + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(bytes(rows), 6))
+            + chunk(b"IEND", b""))

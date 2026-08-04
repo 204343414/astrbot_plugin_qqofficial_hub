@@ -363,3 +363,56 @@ def test_insert_text_is_length_capped_like_qq_requires():
             "id": "t", "markdown": "# t",
             "rows": [[{"id": "x", "label": "x", "insert_text": "y" * 101}]],
         })
+
+
+# --- auto-generated button ids ----------------------------------------------
+
+def test_a_chinese_label_can_omit_its_button_id():
+    """Omitting the id must work for the labels this Hub actually renders.
+
+    The derived id used to be ``button-<label>``, which fails CARD_ID_RE for
+    any non-ASCII text -- so "id is optional" was true only for English
+    buttons and raised for every Chinese one.
+    """
+    card = ep.validate_card({
+        "id": "menu",
+        "markdown": "选一个",
+        "rows": [[{"label": "人机对战", "insert_text": "/井字棋 人机"}]],
+    })
+    button_id = card["rows"][0][0]["id"]
+    assert ep.CARD_ID_RE.fullmatch(button_id), button_id
+
+
+def test_a_derived_button_id_is_stable_across_renders():
+    """One-shot bookkeeping keys on the id, so re-rendering the same card must
+    produce the same id or a used button would come back to life."""
+    def build():
+        return ep.validate_card({
+            "id": "menu",
+            "markdown": "选一个",
+            "rows": [[{"label": "困难", "insert_text": "/难度 困难"}]],
+        })["rows"][0][0]["id"]
+
+    assert build() == build()
+
+
+def test_different_labels_derive_different_ids():
+    card = ep.validate_card({
+        "id": "menu",
+        "markdown": "选一个",
+        "rows": [[
+            {"label": "轻松", "insert_text": "/难度 轻松"},
+            {"label": "普通", "insert_text": "/难度 普通"},
+        ]],
+    })
+    ids = [b["id"] for b in card["rows"][0]]
+    assert len(set(ids)) == 2, "同卡按钮 ID 必须唯一，否则点击无法区分"
+
+
+def test_an_explicit_id_still_wins():
+    card = ep.validate_card({
+        "id": "menu",
+        "markdown": "选一个",
+        "rows": [[{"id": "diff.hard", "label": "困难", "insert_text": "/x"}]],
+    })
+    assert card["rows"][0][0]["id"] == "diff.hard"

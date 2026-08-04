@@ -11,6 +11,7 @@ from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 
 from .qqofficial_hub import (
+    diagnostics,
     ephemeral,
     identity,
     image_host,
@@ -37,7 +38,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.19.1", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.20.0", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -398,6 +399,102 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         except Exception as exc:
             logger.exception("[QQHub] Native mention proactive probe failed")
             yield event.plain_result(f"艾特主动测试失败：{type(exc).__name__}: {exc}")
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
+    @filter.command("诊断", alias={"qqhub 诊断", "hub诊断"}, priority=100)
+    async def diagnostics_command(self, event: AstrMessageEvent):
+        """在群里跑一次 Hub 自检，一条消息给出全部结果。
+
+        诊断此前只存在于 WebUI 抽屉里，而需要诊断的时刻——卡片没反应、图片裂
+        开——人正在群里，不在后台。一条消息说完是硬要求：QQ 官方的回复配额按条
+        计，分三条发的自检等于没人会跑的自检。
+        """
+        event.stop_event()
+        try:
+            report = await diagnostics.build_report(self)
+            yield event.plain_result(diagnostics.format_report(report))
+        except Exception as exc:
+            logger.exception("[QQHub] Diagnostics command failed")
+            yield event.plain_result(f"自检失败：{type(exc).__name__}: {exc}")
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
+    @filter.command("图床测试", alias={"qqhub 图床测试"}, priority=100)
+    async def image_host_probe(self, event: AstrMessageEvent):
+        """End-to-end proof that a card can show a picture.
+
+        Sends one Markdown card embedding a freshly generated image from the
+        built-in host. This is the only test that covers the whole chain --
+        publish, tunnel, Tencent's fetcher, the client's renderer -- because
+        every earlier link can succeed while the picture still fails to load.
+
+        The probe image changes on every run on purpose: an identical picture
+        could be a cached copy of the last one, which would make a broken
+        tunnel look like a working one.
+        """
+        event.stop_event()
+        origin = str(event.unified_msg_origin or "")
+        if "GroupMessage" not in origin:
+            yield event.plain_result("图床测试仅支持 QQ Official 群聊。")
+            return
+        if not self.image_host_enabled:
+            yield event.plain_result("图床未开启：请在 Hub 配置里打开 image_host_enabled。")
+            return
+        # A quick tunnel renames itself on restart, so re-ask before blaming
+        # the config: the usual cause of "not configured" is a new hostname.
+        if not self.image_host.configured:
+            await self.image_host.discover_base_url()
+        if not self.image_host.running and self.image_host.configured:
+            try:
+                await self.image_host.start()
+            except Exception as exc:
+                yield event.plain_result(f"图床启动失败：{type(exc).__name__}: {exc}")
+                return
+        if not self.image_host_ready():
+            status = self.image_host.status()
+            yield event.plain_result(
+                "图床未就绪：" + (
+                    "拿不到公网地址（cloudflared 没跑，或 metrics 端口 "
+                    f"{status['port'] and self.image_host.metrics_port} 不可达）"
+                    if not status["configured"]
+                    else f"端口 {status['port']} 未监听"
+                )
+            )
+            return
+        try:
+            data = image_host.make_probe_png()
+            url = self.publish_image(data, slot=f"probe:{origin}")
+        except Exception as exc:
+            logger.exception("[QQHub] Image host probe failed to publish")
+            yield event.plain_result(f"图床发布失败：{type(exc).__name__}: {exc}")
+            return
+        card = {
+            "id": "hub.imageprobe",
+            "markdown": (
+                "**图床自检**\n"
+                f"![自检图 #480px #270px]({url})\n"
+                "看到棋盘格 = 全链路通。裂图 = 腾讯抓不到这个地址。\n"
+                "再打一次 /图床测试，图案颜色会变——不变就是客户端缓存。"
+            ),
+            "rows": [],
+            "ttl_seconds": 600,
+        }
+        try:
+            await self.send_ephemeral_card(
+                origin, card,
+                msg_id=str(event.message_obj.message_id or "") or None,
+                initiator_openid=str(event.get_sender_id() or ""),
+            )
+        except Exception as exc:
+            logger.exception("[QQHub] Image host probe card failed")
+            yield event.plain_result(f"图床自检卡发送失败：{type(exc).__name__}: {exc}")
+            return
+        logger.info("[QQHub] Image probe published %s", url)
 
     async def _send_native_mention_probe(
         self, event: AstrMessageEvent, *, reply: bool

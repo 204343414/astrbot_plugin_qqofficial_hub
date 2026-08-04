@@ -276,11 +276,15 @@ class EphemeralCardMixin:
                 await self._render_dynamic_markdown(validated["markdown"], origin),
                 clicker_header,
             )},
-            "keyboard": {"content": {
-                "rows": ephemeral.to_keyboard_rows(validated, nonce)
-            }},
             "msg_seq": next_msg_seq(),
         }
+        # A card may legitimately be all text and picture (a board snapshot, a
+        # diagnostic). Sending ``rows: []`` asks QQ to render a keyboard with
+        # nothing in it, which it rejects -- so omit the field entirely rather
+        # than send an empty one.
+        keyboard_rows = ephemeral.to_keyboard_rows(validated, nonce)
+        if keyboard_rows:
+            payload["keyboard"] = {"content": {"rows": keyboard_rows}}
         msg_id = real_msg_id(msg_id)
         if msg_id:
             payload["msg_id"] = msg_id

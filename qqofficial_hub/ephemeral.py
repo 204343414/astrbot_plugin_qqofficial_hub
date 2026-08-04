@@ -27,6 +27,7 @@ a real guard rather than a racy hint.
 from __future__ import annotations
 
 import copy
+import hashlib
 import re
 import secrets
 import time
@@ -145,9 +146,19 @@ def _validate_button(value: object) -> dict[str, Any]:
     label = str(value.get("label") or "").strip()
     if not label or len(label) > 64:
         raise EphemeralError("按钮文字必须为 1~64 字符")
-    button_id = str(value.get("id") or "").strip() or f"button-{label}"
-    if not CARD_ID_RE.fullmatch(button_id):
-        raise EphemeralError("按钮 ID 含非法字符")
+    button_id = str(value.get("id") or "").strip()
+    if button_id:
+        if not CARD_ID_RE.fullmatch(button_id):
+            raise EphemeralError("按钮 ID 含非法字符")
+    else:
+        # Derive one instead of demanding it. The old default was
+        # ``button-<label>``, which is illegal for every Chinese label -- i.e.
+        # for essentially every button this Hub renders -- so "omit the id"
+        # was a documented option that always raised. Hash the label so the
+        # id stays stable across re-renders of the same card, which is what
+        # one-shot bookkeeping keys on.
+        digest = hashlib.sha1(label.encode("utf-8")).hexdigest()[:12]
+        button_id = f"button-{digest}"
     action_id = str(value.get("action_id") or "").strip()
     next_card = str(value.get("next_card") or "").strip()
     # An insert button is QQ's action.type=2: tapping appends text to the

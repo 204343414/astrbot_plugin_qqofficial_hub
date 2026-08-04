@@ -355,3 +355,107 @@ def test_a_configured_base_url_is_reported_in_status():
     host = make_host(base_url="https://img.example.com/")
     assert host.status()["base_url"] == "https://img.example.com"
     assert host.configured is True
+
+
+# --- fetch accounting -------------------------------------------------------
+#
+# Publishing succeeds entirely locally: the URL is minted whether or not any
+# outside party can reach it. So "did it work?" can only be answered by
+# counting who actually came and took the bytes.
+
+def test_a_fetch_is_counted_so_the_chain_can_be_proven():
+    host = make_host(base_url="https://img.example.com")
+    assert host.status()["hits"] == 0
+
+    async def scenario():
+        await host.start()
+        try:
+            url = host.publish(png())
+            token = url.rsplit("/", 1)[-1]
+            request = SimpleNamespace(match_info={"name": token})
+            await host._serve(request)
+            await host._serve(request)
+            return token
+        finally:
+            await host.stop()
+
+    token = asyncio.run(scenario())
+    assert token
+    assert host.status()["hits"] == 2, "抓取次数必须累计，否则无法自证链路可用"
+
+
+def test_a_missing_token_counts_as_a_miss_not_a_hit():
+    """A 404 must not look like a successful fetch.
+
+    Otherwise a stale URL in an old card would inflate the counter and make a
+    broken host report as healthy.
+    """
+    from aiohttp import web
+
+    host = make_host(base_url="https://img.example.com")
+
+    async def scenario():
+        await host.start()
+        try:
+            with pytest.raises(web.HTTPNotFound):
+                await host._serve(SimpleNamespace(match_info={"name": "nope"}))
+        finally:
+            await host.stop()
+
+    asyncio.run(scenario())
+    status = host.status()
+    assert status["hits"] == 0 and status["misses"] == 1
+
+
+def test_hit_counters_survive_the_image_being_swept_away():
+    """Evidence must outlive the file it refers to.
+
+    Images are deleted within minutes; a user running diagnostics afterwards
+    still needs to know whether anything ever fetched one.
+    """
+    host = make_host(base_url="https://img.example.com", grace_seconds=0)
+
+    async def scenario():
+        await host.start()
+        try:
+            url = host.publish(png(), slot="g1")
+            token = url.rsplit("/", 1)[-1]
+            await host._serve(SimpleNamespace(match_info={"name": token}))
+            host.publish(png((1, 2, 3)), slot="g1")   # retires the first
+            host.sweep()
+        finally:
+            await host.stop()
+
+    asyncio.run(scenario())
+    assert host.status()["hits"] == 1
+
+
+# --- probe image ------------------------------------------------------------
+
+def test_the_probe_image_is_a_real_png_without_any_imaging_library():
+    """The self test must run on a host where Pillow is missing.
+
+    A diagnostic that only works on healthy systems cannot diagnose anything.
+    """
+    from qqofficial_hub.image_host import make_probe_png
+
+    data = make_probe_png(seed=1)
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    Image = pytest.importorskip("PIL.Image", reason="需要 Pillow 才能验证解码")
+    image = Image.open(io.BytesIO(data))
+    assert image.size == (480, 270) and image.mode == "RGB"
+
+
+def test_two_probes_look_different_so_a_cached_picture_cannot_pass():
+    """If every probe rendered identically, a stale cached image on the client
+    would be indistinguishable from a freshly fetched one -- and the test
+    would report success while the tunnel was down."""
+    from qqofficial_hub.image_host import make_probe_png
+
+    assert make_probe_png(seed=1) != make_probe_png(seed=2)
+
+
+def test_the_probe_image_is_small_enough_to_publish():
+    from qqofficial_hub.image_host import MAX_IMAGE_BYTES, make_probe_png
+
+    assert len(make_probe_png(seed=7)) < MAX_IMAGE_BYTES
