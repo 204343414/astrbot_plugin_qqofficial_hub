@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import secrets
 import time
 from dataclasses import dataclass
@@ -76,6 +77,8 @@ class ImageHost:
         port: int = 9527,
         grace_seconds: int = DEFAULT_GRACE_SECONDS,
         max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
+        metrics_host: str = "127.0.0.1",
+        metrics_port: int = 20241,
     ) -> None:
         self.directory = Path(data_dir) / "images"
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -83,6 +86,8 @@ class ImageHost:
         self.port = int(port)
         self.grace_seconds = max(int(grace_seconds), 0)
         self.max_age_seconds = max(int(max_age_seconds), 60)
+        self.metrics_host = metrics_host or "127.0.0.1"
+        self.metrics_port = int(metrics_port)
 
         self._entries: dict[str, _Entry] = {}
         #: slot key (usually a group origin) -> the token currently live there.
@@ -104,6 +109,44 @@ class ImageHost:
     def configured(self) -> bool:
         """Whether a public base URL has been set. Without one, nothing works."""
         return bool(self.base_url.startswith("http"))
+
+    async def discover_base_url(self) -> str:
+        """Ask a local cloudflared for its current quick-tunnel hostname.
+
+        A quick tunnel (``cloudflared tunnel --url ...``) gets a fresh random
+        ``*.trycloudflare.com`` name on every restart, so hard-coding it in
+        the config would break after each reboot. cloudflared exposes the
+        current one on its metrics port:
+
+            GET http://127.0.0.1:20241/quicktunnel
+            {"hostname": "accent-owns-equally-expo.trycloudflare.com"}
+
+        Returns "" when there is no quick tunnel to ask, which is the normal
+        case for a named tunnel with a fixed domain.
+        """
+        import aiohttp
+
+        url = f"http://{self.metrics_host}:{self.metrics_port}/quicktunnel"
+        try:
+            timeout = aiohttp.ClientTimeout(total=4)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        return ""
+                    # cloudflared serves this JSON as text/plain, so
+                    # response.json() refuses it outright -- parse the body
+                    # instead of trusting the declared content type.
+                    payload = json.loads(await response.text())
+                    hostname = str(payload.get("hostname") or "")
+        except Exception:
+            return ""
+        if not hostname:
+            return ""
+        discovered = f"https://{hostname}"
+        if discovered != self.base_url:
+            logger.info("[QQHub] 自动发现隧道地址：%s", discovered)
+        self.base_url = discovered
+        return discovered
 
     async def start(self) -> None:
         """Bind the local port. Idempotent."""
@@ -280,4 +323,5 @@ class ImageHost:
             "stored_images": len(self._entries),
             "grace_seconds": self.grace_seconds,
             "max_age_seconds": self.max_age_seconds,
+            "metrics_endpoint": f"http://{self.metrics_host}:{self.metrics_port}",
         }

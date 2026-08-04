@@ -164,8 +164,33 @@ hub.retire_image_slot(origin)                     # 对局结束时释放
 腾讯的抓图服务器没有登录态，必然 401。因此图床自己监听一个端口，无鉴权、
 只响应 GET、只返回自己写过的随机 token 文件。
 
+#### 快速隧道：不用买域名，也不用手填地址
+
+最省事的接法是 Cloudflare **快速隧道**，零配置、无需账号、无需域名：
+
+```bash
+docker run -d --name cloudflared --network container:astrbot \
+  cloudflare/cloudflared:latest \
+  tunnel --url http://127.0.0.1:9527 --metrics 0.0.0.0:20241 --no-autoupdate
+```
+
+`--network container:astrbot` 让它和 AstrBot 共享网络栈，这样 `127.0.0.1:9527`
+才真的指向 Hub 的图床端口。
+
+快速隧道**每次重启都会换一个随机域名**，所以 `image_host_base_url` **留空**即可——
+Hub 会去问本机 cloudflared 当前的域名：
+
+```
+GET http://127.0.0.1:20241/quicktunnel
+{"hostname":"accent-owns-equally-expo.trycloudflare.com"}
+```
+
+> 想要固定域名（重启不变）就用具名隧道，需要一个托管在 Cloudflare 的域名，
+> 然后把 `image_host_base_url` 填成你的域名。
+
 配置：`image_host_enabled` / `image_host_base_url` / `image_host_port` /
-`image_host_grace_seconds`。诊断页会显示「就绪 / 缺 base_url / 端口未监听」。
+`image_host_metrics_port` / `image_host_grace_seconds`。
+诊断页会显示「就绪 / 缺 base_url / 端口未监听」。
 
 ### 富媒体：图片 / 语音 / 视频
 

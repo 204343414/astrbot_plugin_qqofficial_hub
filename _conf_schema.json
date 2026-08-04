@@ -11,9 +11,14 @@
     "default": false
   },
   "image_host_base_url": {
-    "description": "图床的公网地址，如 https://img.example.com（隧道指向本机 image_host_port）。留空则图床不可用。",
+    "description": "图床的公网地址，如 https://img.example.com。留空则尝试从本机 cloudflared 自动发现（快速隧道每次重启换域名，留空最省心）。",
     "type": "string",
     "default": ""
+  },
+  "image_host_metrics_port": {
+    "description": "本机 cloudflared 的 metrics 端口，默认 20241。留空 base_url 时用它自动发现隧道域名。",
+    "type": "int",
+    "default": 20241
   },
   "image_host_port": {
     "description": "图床本地监听端口，默认 9527。隧道 ingress 指到这个端口。",

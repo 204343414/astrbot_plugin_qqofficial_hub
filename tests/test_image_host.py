@@ -301,3 +301,57 @@ def test_starting_twice_is_harmless():
         finally:
             await host.stop()
     asyncio.run(scenario())
+
+
+# --- quick-tunnel discovery -------------------------------------------------
+#
+# A quick tunnel (cloudflared tunnel --url ...) gets a fresh random
+# *.trycloudflare.com name on every restart, so a hard-coded base_url breaks
+# after each reboot. cloudflared publishes the current one on its metrics port.
+
+def test_discovery_reads_the_current_quick_tunnel_hostname():
+    """cloudflared serves this JSON as text/plain.
+
+    aiohttp's .json() refuses that mimetype outright, which silently made
+    discovery look like "no tunnel running" -- so the body is parsed directly.
+    """
+    async def scenario():
+        aiohttp = pytest.importorskip("aiohttp")
+        from aiohttp import web
+
+        async def quicktunnel(_request):
+            # text/plain on purpose: this is what cloudflared actually sends.
+            return web.Response(
+                text='{"hostname":"random-words.trycloudflare.com"}',
+                content_type="text/plain")
+
+        app = web.Application()
+        app.router.add_get("/quicktunnel", quicktunnel)
+        runner = web.AppRunner(app, access_log=None)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 20291)
+        await site.start()
+        try:
+            host = make_host(metrics_port=20291)
+            assert host.configured is False
+            found = await host.discover_base_url()
+            assert found == "https://random-words.trycloudflare.com"
+            assert host.configured is True
+        finally:
+            await runner.cleanup()
+    asyncio.run(scenario())
+
+
+def test_discovery_is_quiet_when_no_tunnel_is_running():
+    """A named tunnel with a fixed domain has nothing to discover, and that
+    must not look like an error."""
+    async def scenario():
+        host = make_host(metrics_port=20292)
+        assert await host.discover_base_url() == ""
+    asyncio.run(scenario())
+
+
+def test_a_configured_base_url_is_reported_in_status():
+    host = make_host(base_url="https://img.example.com/")
+    assert host.status()["base_url"] == "https://img.example.com"
+    assert host.configured is True

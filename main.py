@@ -85,6 +85,7 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
             base_url=str(config.get("image_host_base_url", "") or ""),
             port=int(config.get("image_host_port", 9527) or 9527),
             grace_seconds=int(config.get("image_host_grace_seconds", 300) or 300),
+            metrics_port=int(config.get("image_host_metrics_port", 20241) or 20241),
         )
         self.image_host_enabled = bool(config.get("image_host_enabled", False))
         if self.experimental_bridge:
@@ -92,9 +93,16 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
 
     async def initialize(self) -> None:
         if self.image_host_enabled:
+            # A quick tunnel renames itself on every restart, so an empty
+            # base_url means "ask the local cloudflared what it is now"
+            # rather than "give up".
+            if not self.image_host.configured:
+                await self.image_host.discover_base_url()
             if not self.image_host.configured:
                 logger.warning(
-                    "[QQHub] 图床已开启但未填 image_host_base_url，卡片内嵌图片不可用"
+                    "[QQHub] 图床已开启但拿不到公网地址：填 image_host_base_url，"
+                    "或让本机 cloudflared 的 metrics 端口(%d)可访问",
+                    self.image_host.metrics_port,
                 )
             else:
                 try:
