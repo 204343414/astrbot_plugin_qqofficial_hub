@@ -188,6 +188,11 @@ def _validate_button(value: object) -> dict[str, Any]:
         "action_id": action_id,
         "next_card": next_card,
         "insert_text": insert_text,
+        # type=2 only. Makes the message the user ends up sending a *quote* of
+        # the card. For a picture board that is the difference between "a move
+        # aimed at this position" and "someone typing 鼠 下 in conversation",
+        # and it removes the need to match message ids by hand.
+        "reply": bool(value.get("reply", False)),
         "params": params,
         # Button-level one-shot: only this button retires, card stays usable.
         "one_shot": bool(value.get("one_shot", False)),
@@ -329,6 +334,10 @@ def to_keyboard_rows(card: dict[str, Any], nonce: str) -> list[dict[str, Any]]:
                     "permission": {"type": 2},
                     "data": insert_text,
                     "enter": False,
+                    # Quote the card the button lives on. A board card is a
+                    # picture, so this makes every move an explicit reply to
+                    # the position it was played against.
+                    "reply": bool(item.get("reply", False)),
                     "unsupport_tips": item["unsupport_tips"],
                 }
             else:

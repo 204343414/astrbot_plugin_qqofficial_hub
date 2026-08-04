@@ -38,7 +38,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.20.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.21.0", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -445,22 +445,12 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         if not self.image_host_enabled:
             yield event.plain_result("图床未开启：请在 Hub 配置里打开 image_host_enabled。")
             return
-        # A quick tunnel renames itself on restart, so re-ask before blaming
-        # the config: the usual cause of "not configured" is a new hostname.
-        if not self.image_host.configured:
-            await self.image_host.discover_base_url()
-        if not self.image_host.running and self.image_host.configured:
-            try:
-                await self.image_host.start()
-            except Exception as exc:
-                yield event.plain_result(f"图床启动失败：{type(exc).__name__}: {exc}")
-                return
-        if not self.image_host_ready():
+        if not await self.image_host_reachable():
             status = self.image_host.status()
             yield event.plain_result(
                 "图床未就绪：" + (
                     "拿不到公网地址（cloudflared 没跑，或 metrics 端口 "
-                    f"{status['port'] and self.image_host.metrics_port} 不可达）"
+                    f"{self.image_host.metrics_port} 不可达）"
                     if not status["configured"]
                     else f"端口 {status['port']} 未监听"
                 )
@@ -468,7 +458,7 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
             return
         try:
             data = image_host.make_probe_png()
-            url = self.publish_image(data, slot=f"probe:{origin}")
+            url = await self.publish_image_checked(data, slot=f"probe:{origin}")
         except Exception as exc:
             logger.exception("[QQHub] Image host probe failed to publish")
             yield event.plain_result(f"图床发布失败：{type(exc).__name__}: {exc}")

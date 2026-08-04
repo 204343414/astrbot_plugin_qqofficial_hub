@@ -459,3 +459,144 @@ def test_the_probe_image_is_small_enough_to_publish():
     from qqofficial_hub.image_host import MAX_IMAGE_BYTES, make_probe_png
 
     assert len(make_probe_png(seed=7)) < MAX_IMAGE_BYTES
+
+
+# --- surviving a tunnel restart ---------------------------------------------
+#
+# A quick tunnel renames itself every time cloudflared restarts. Nothing
+# reports this: publishing succeeds, the card sends, and the picture is simply
+# broken for everyone. It is the only failure in this chain that is entirely
+# silent, so it gets the most tests.
+
+class _FakeTunnel:
+    """Stands in for cloudflared's /quicktunnel endpoint."""
+
+    def __init__(self, hostname):
+        self.hostname = hostname
+        self.asked = 0
+
+    async def __call__(self):
+        self.asked += 1
+        return f"https://{self.hostname}" if self.hostname else ""
+
+
+def _with_tunnel(host, tunnel):
+    host.discover_base_url = _bind(host, tunnel)
+    return host
+
+
+def _bind(host, tunnel):
+    async def discover():
+        url = await tunnel()
+        if url and url != host.base_url:
+            if host.base_url:
+                host._rediscoveries += 1
+            host.base_url = url
+        return url
+    return discover
+
+
+def test_a_renamed_tunnel_is_picked_up_before_the_next_publish():
+    host = make_host()
+    tunnel = _FakeTunnel("first.trycloudflare.com")
+    _with_tunnel(host, tunnel)
+
+    async def scenario():
+        assert await host.ensure_reachable() is True
+        assert host.base_url == "https://first.trycloudflare.com"
+        tunnel.hostname = "second.trycloudflare.com"
+        assert await host.ensure_reachable() is True
+        return host.base_url
+
+    assert asyncio.run(scenario()) == "https://second.trycloudflare.com"
+    assert host.status()["rediscoveries"] == 1, "换域名必须被记下，否则裂图无从解释"
+
+
+def test_a_hand_written_base_url_is_never_overwritten():
+    """A configured URL is a promise about infrastructure the operator owns.
+
+    Second-guessing it would break exactly the fixed-domain named-tunnel
+    setup that config field exists to support.
+    """
+    host = make_host(base_url="https://img.example.com")
+    assert host.pinned is True
+    tunnel = _FakeTunnel("random.trycloudflare.com")
+    _with_tunnel(host, tunnel)
+
+    assert asyncio.run(host.ensure_reachable()) is True
+    assert host.base_url == "https://img.example.com"
+    assert tunnel.asked == 0, "固定域名不该去问 cloudflared"
+
+
+def test_a_dead_cloudflared_keeps_the_last_known_address():
+    """Dropping the address would guarantee failure while only maybe being
+    right -- the old tunnel may well still be serving."""
+    host = make_host()
+    tunnel = _FakeTunnel("first.trycloudflare.com")
+    _with_tunnel(host, tunnel)
+
+    async def scenario():
+        await host.ensure_reachable()
+        tunnel.hostname = ""            # cloudflared is down
+        return await host.ensure_reachable()
+
+    assert asyncio.run(scenario()) is True
+    assert host.base_url == "https://first.trycloudflare.com"
+    assert "沿用" in host.status()["last_error"]
+
+
+def test_no_tunnel_at_all_reports_unusable_rather_than_pretending():
+    host = make_host()
+    _with_tunnel(host, _FakeTunnel(""))
+    assert asyncio.run(host.ensure_reachable()) is False
+    assert host.configured is False
+
+
+def test_a_renamed_tunnel_does_not_reuse_a_url_from_the_old_hostname():
+    """Identical bytes normally reuse the existing URL, which is right until
+    the hostname moves -- then that URL points nowhere and the picture is
+    broken even though publishing 'succeeded'."""
+    host = make_host()
+    tunnel = _FakeTunnel("first.trycloudflare.com")
+    _with_tunnel(host, tunnel)
+    image = png()
+
+    async def scenario():
+        await host.ensure_reachable()
+        await host.start()
+        try:
+            before = host.publish(image, slot="g1")
+            tunnel.hostname = "second.trycloudflare.com"
+            await host.ensure_reachable()
+            after = host.publish(image, slot="g1")
+            return before, after
+        finally:
+            await host.stop()
+
+    before, after = asyncio.run(scenario())
+    assert before.startswith("https://first.")
+    assert after.startswith("https://second."), "换域名后必须重新发布，不能复用旧 URL"
+
+
+def test_an_unchanged_tunnel_still_reuses_the_url_for_identical_bytes():
+    """The invalidation must be triggered by the rename, not by the check.
+
+    Otherwise every board redraw would orphan a file and the 'one image per
+    group' guarantee would quietly stop holding.
+    """
+    host = make_host()
+    _with_tunnel(host, _FakeTunnel("stable.trycloudflare.com"))
+    image = png()
+
+    async def scenario():
+        await host.ensure_reachable()
+        await host.start()
+        try:
+            first = host.publish(image, slot="g1")
+            await host.ensure_reachable()
+            return first, host.publish(image, slot="g1")
+        finally:
+            await host.stop()
+
+    first, second = asyncio.run(scenario())
+    assert first == second

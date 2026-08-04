@@ -207,13 +207,53 @@ class EphemeralCardMixin:
 
         Raises when the host is not configured -- callers should fall back to
         sending a plain image message rather than failing the whole action.
+
+        Synchronous, and therefore does **not** re-check the tunnel. Prefer
+        :meth:`publish_image_checked`, which does; this remains for callers
+        that cannot await.
         """
         return self.image_host.publish(data, slot=slot)
 
+    async def publish_image_checked(self, data: bytes, slot: str = "") -> str:
+        """Publish, first confirming the public address still reaches us.
+
+        This is the one to call before putting a URL inside a card. A quick
+        tunnel renames itself whenever cloudflared restarts, and nothing
+        anywhere reports it: the publish succeeds, the card sends, and the
+        picture is simply broken for every viewer. Verifying costs one
+        loopback request and removes the only failure mode in this chain that
+        is completely silent.
+        """
+        host = getattr(self, "image_host", None)
+        if host is None:
+            raise RuntimeError("图床未初始化")
+        await host.ensure_reachable()
+        if not host.running and host.configured:
+            await host.start()
+        return host.publish(data, slot=slot)
+
     def image_host_ready(self) -> bool:
-        """Whether cards can embed images right now."""
+        """Whether cards can embed images right now.
+
+        Synchronous, so it reports the last known state rather than probing.
+        Use :meth:`image_host_reachable` when the answer must be current.
+        """
         host = getattr(self, "image_host", None)
         return bool(host and host.configured and host.running)
+
+    async def image_host_reachable(self) -> bool:
+        """Like :meth:`image_host_ready`, but re-checks the tunnel first."""
+        host = getattr(self, "image_host", None)
+        if host is None or not getattr(self, "image_host_enabled", False):
+            return False
+        await host.ensure_reachable()
+        if not host.running and host.configured:
+            try:
+                await host.start()
+            except Exception:
+                logger.warning("[QQHub] 图床启动失败", exc_info=True)
+                return False
+        return bool(host.configured and host.running)
 
     def retire_image_slot(self, slot: str) -> None:
         host = getattr(self, "image_host", None)

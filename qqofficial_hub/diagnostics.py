@@ -28,7 +28,9 @@ REQUIRED_HUB_API = (
     "get_action_catalog",
     "send_media_message",
     "publish_image",
+    "publish_image_checked",
     "image_host_ready",
+    "image_host_reachable",
     "actions",
 )
 
@@ -306,9 +308,17 @@ def format_report(report: dict[str, Any]) -> str:
         # publishing succeeds locally whether or not anyone can reach us.
         hits = int(host.get("hits", 0) or 0)
         detail += f"，被抓取 {hits} 次" if hits else "，尚未被抓取"
+        moved = int(host.get("rediscoveries", 0) or 0)
+        if moved:
+            # Says out loud what is otherwise a silent, group-wide broken
+            # image: the tunnel restarted and every card sent before it died.
+            detail += f"，域名换过 {moved} 次"
         lines.append(f"图床 {host.get('hint', '?')}{detail}")
+        if host.get("last_error"):
+            lines.append(f"　└ ⚠️ {host['last_error']}")
         if host.get("base_url"):
-            lines.append(f"　└ {host['base_url']}")
+            source = "固定" if host.get("pinned") else "自动发现"
+            lines.append(f"　└ {host['base_url']}（{source}）")
 
     storage = report.get("storage") or {}
     lines.append(

@@ -28,7 +28,9 @@ def _plugin():
         unregister_card_provider=lambda *a, **k: None,
         send_media_message=lambda *a, **k: None,
         publish_image=lambda *a, **k: "",
+        publish_image_checked=lambda *a, **k: "",
         image_host_ready=lambda: False,
+        image_host_reachable=lambda: False,
     )
     return plugin, registry, store
 

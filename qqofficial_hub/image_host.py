@@ -93,6 +93,12 @@ class ImageHost:
         self.directory = Path(data_dir) / "images"
         self.directory.mkdir(parents=True, exist_ok=True)
         self.base_url = base_url.rstrip("/")
+        #: A base URL typed into the config is a promise the operator made
+        #: (a named tunnel, a reverse proxy) and must never be overwritten by
+        #: autodiscovery. An empty one means "work it out yourself, and keep
+        #: working it out" -- which is the whole point of a quick tunnel whose
+        #: hostname changes on every restart.
+        self.pinned = bool(self.base_url)
         self.port = int(port)
         self.grace_seconds = max(int(grace_seconds), 0)
         self.max_age_seconds = max(int(max_age_seconds), 60)
@@ -106,6 +112,12 @@ class ImageHost:
         #: chain worked is not lost when the file it refers to is deleted.
         self._hits = 0
         self._misses = 0
+        #: When the public address was last confirmed, and how often it moved.
+        #: A rising rediscovery count is the visible symptom of a tunnel that
+        #: keeps restarting, which is otherwise silent.
+        self._checked_at = 0.0
+        self._rediscoveries = 0
+        self._last_error = ""
         self._runner: Any = None
         self._site: Any = None
         self._sweeper: asyncio.Task | None = None
@@ -158,9 +170,66 @@ class ImageHost:
             return ""
         discovered = f"https://{hostname}"
         if discovered != self.base_url:
-            logger.info("[QQHub] 自动发现隧道地址：%s", discovered)
+            if self.base_url:
+                # Not noise: every card sent under the old name now shows a
+                # broken image, and this line is the only record of why.
+                self._rediscoveries += 1
+                logger.warning("[QQHub] 隧道域名已变更：%s → %s（旧卡片的图会裂）",
+                               self.base_url, discovered)
+            else:
+                logger.info("[QQHub] 自动发现隧道地址：%s", discovered)
         self.base_url = discovered
+        self._checked_at = time.time()
         return discovered
+
+    async def ensure_reachable(self) -> bool:
+        """Confirm the public address still points at us, repairing it if not.
+
+        A quick tunnel renames itself every time cloudflared restarts. Nothing
+        reports this: publishing keeps succeeding, cards keep sending, and the
+        only symptom is that every image silently fails to load for everyone
+        in the group. Discovering the hostname once at startup therefore fixes
+        the problem exactly until the first tunnel restart.
+
+        So the address is treated as a *lease* rather than a fact, and checked
+        against the local cloudflared before it is used. The check is a single
+        request to a loopback metrics port -- cheap enough to run per publish,
+        and far cheaper than a group full of broken images nobody reports.
+
+        A base URL set by hand in the config is left alone: that is an
+        operator's promise about their own infrastructure (a named tunnel, a
+        reverse proxy), and second-guessing it would break the fixed-domain
+        setup this is supposed to support.
+
+        Returns whether an address is usable afterwards.
+        """
+        if self.pinned:
+            return self.configured
+        before = self.base_url
+        discovered = await self.discover_base_url()
+        if not discovered:
+            # cloudflared is down or restarting. Keep the address we have: it
+            # may still work, and dropping it would guarantee failure while
+            # only maybe being right.
+            self._last_error = "cloudflared 无响应，沿用上次的域名"
+            return self.configured
+        self._last_error = ""
+        if before and discovered != before:
+            # Every previously published URL is dead now. Republishing is the
+            # caller's business; what matters here is not handing out more
+            # URLs under a hostname that no longer resolves to us.
+            self._invalidate_published()
+        return True
+
+    def _invalidate_published(self) -> None:
+        """Forget slot ownership after the hostname moved.
+
+        The files are still served under their tokens, so anything already
+        fetched keeps working. What must not happen is a later publish into
+        the same slot deciding "same bytes, reuse the old URL" -- that URL
+        carries the dead hostname.
+        """
+        self._slots.clear()
 
     async def start(self) -> None:
         """Bind the local port. Idempotent."""
@@ -297,6 +366,12 @@ class ImageHost:
             try:
                 await asyncio.sleep(60)
                 self.sweep()
+                # Re-check the lease even when nothing is being published.
+                # Publishing already verifies, but a tunnel that restarts
+                # during a quiet hour would otherwise stay broken until the
+                # next card -- and the person who sends that card is the one
+                # who gets the broken image. Finding out first is free.
+                await self.ensure_reachable()
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -349,6 +424,10 @@ class ImageHost:
             "last_hit_at": max(
                 (e.last_hit_at for e in self._entries.values()), default=0.0
             ),
+            "pinned": self.pinned,
+            "checked_at": self._checked_at,
+            "rediscoveries": self._rediscoveries,
+            "last_error": self._last_error,
         }
 
 
