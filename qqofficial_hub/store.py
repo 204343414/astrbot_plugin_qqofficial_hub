@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -84,8 +85,58 @@ class PanelStore:
             self._write_atomic(value)
         return value
 
+    def _refresh_ephemeral_from_disk(self) -> dict[str, Any]:
+        """Adopt cards another instance issued, then return the table."""
+        self._merge_live_cards(self._data)
+        return self._data.setdefault("ephemeral_cards", {})
+
+    def _merge_live_cards(self, value: dict[str, Any]) -> None:
+        """Fold in ephemeral cards this instance has never seen.
+
+        Every write serialises the whole in-memory snapshot, which is fine
+        while one instance owns the file. AstrBot, however, keeps the *old*
+        plugin instance alive across a reload -- pending tasks and the
+        interaction bridge still reference it -- so both write, and the last
+        one wins. Cards issued by the new instance vanished when the old one
+        flushed, and the next tap answered "卡片不存在或已过期".
+
+        Merging alone is not enough: "absent from memory" and "deliberately
+        retired" look identical, so a plain union resurrects cards that
+        end_ephemeral_session just deleted. Retirements are therefore recorded
+        as tombstones and re-applied after the union.
+        """
+        try:
+            on_disk = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(on_disk, dict):
+            return
+        stored = on_disk.get("ephemeral_cards")
+        if not isinstance(stored, dict) or not stored:
+            return
+        table = value.setdefault("ephemeral_cards", {})
+        retired = value.setdefault("retired_cards", {})
+        for nonce, record in stored.items():
+            if nonce in retired:
+                continue          # deleted on purpose; do not bring it back
+            table.setdefault(nonce, record)
+        # Adopt the other instance's tombstones too, so a retirement it made
+        # is not undone by us.
+        other_retired = on_disk.get("retired_cards")
+        if isinstance(other_retired, dict):
+            now = int(time.time())
+            for nonce, expires in other_retired.items():
+                retired.setdefault(nonce, expires)
+                table.pop(nonce, None)
+            for nonce, expires in list(retired.items()):
+                # Tombstones only need to outlive the card they mask.
+                if int(expires or 0) <= now:
+                    retired.pop(nonce, None)
+
     def _write_atomic(self, value: dict[str, Any]) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        if self.path.exists():
+            self._merge_live_cards(value)
         fd, tmp_name = tempfile.mkstemp(prefix="panels.", suffix=".tmp", dir=self.data_dir)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as file:
@@ -247,7 +298,7 @@ class PanelStore:
             raise ValueError("卡片只能发送到 QQ Official 群")
         session_id = session_id or ephemeral.new_session_id()
         async with self._lock:
-            table = self._data.setdefault("ephemeral_cards", {})
+            table = self._refresh_ephemeral_from_disk()
             self._prune_ephemeral(table)
             nonce = ephemeral.new_nonce()
             table[nonce] = ephemeral.build_record(origin, card, session_id)
@@ -265,7 +316,7 @@ class PanelStore:
         """
         from . import ephemeral
         async with self._lock:
-            table = self._data.setdefault("ephemeral_cards", {})
+            table = self._refresh_ephemeral_from_disk()
             record = table.get(nonce)
             button = ephemeral.resolve_click(record, origin, button_id, member_openid)
             ephemeral.apply_consumption(record, button)
@@ -277,11 +328,17 @@ class PanelStore:
         if not session_id:
             return 0
         async with self._lock:
-            table = self._data.setdefault("ephemeral_cards", {})
+            table = self._refresh_ephemeral_from_disk()
             removed = [k for k, v in table.items()
                        if isinstance(v, dict) and v.get("session_id") == session_id]
+            retired = self._data.setdefault("retired_cards", {})
             for key in removed:
-                table.pop(key, None)
+                record = table.pop(key, None)
+                # Remember the deletion, or a stale instance's snapshot would
+                # put the card straight back on the next write.
+                retired[key] = int((record or {}).get("expires_at", 0)) or (
+                    int(time.time()) + self.callback_ttl_seconds
+                )
             if removed:
                 self._write_atomic(self._data)
             return len(removed)

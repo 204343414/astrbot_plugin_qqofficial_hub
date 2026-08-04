@@ -10,7 +10,13 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 
-from .qqofficial_hub import ephemeral, identity, interaction_bridge, named_cards
+from .qqofficial_hub import (
+    ephemeral,
+    identity,
+    image_host,
+    interaction_bridge,
+    named_cards,
+)
 from .qqofficial_hub.action_registry import (
     ActionContext,
     ActionSpec,
@@ -31,7 +37,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.19.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.19.1", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)

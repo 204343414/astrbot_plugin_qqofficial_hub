@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from qqofficial_hub import ephemeral as ep
 from qqofficial_hub.store import PanelStore, validate_panel
 
 
@@ -138,3 +139,89 @@ def test_callback_action_params_must_be_small_json_object():
     invalid = {**panel, "rows": [[{**panel["rows"][0][0], "action_params": [1, 2]}]]}
     with pytest.raises(ValueError, match="JSON 对象"):
         validate_panel(invalid)
+
+
+# --- surviving a plugin reload ----------------------------------------------
+#
+# AstrBot keeps the OLD plugin instance alive across a reload (pending tasks,
+# the interaction bridge), so two PanelStore objects share one file. Every
+# write serialises a whole in-memory snapshot, so whichever flushed last used
+# to erase the other's cards -- and the next tap answered
+# "卡片不存在或已过期" seconds after the card was sent.
+
+def _lobby_card():
+    return ep.validate_card({
+        "id": "demo", "markdown": "# demo",
+        "rows": [[{"id": "go", "label": "go", "action_id": "demo.run"}]],
+    })
+
+
+def test_a_stale_instance_does_not_erase_a_new_instances_cards():
+    async def scenario():
+        directory = Path(tempfile.mkdtemp())
+        origin = "qq_official:GroupMessage:G1"
+
+        old = PanelStore(directory, callback_ttl_seconds=3600)
+        await old.bootstrap()
+        old._data.setdefault("groups", {})[origin] = {"seen_at": 1}
+        old_nonce, _ = await old.issue_ephemeral_card(origin, _lobby_card(), "s")
+
+        fresh = PanelStore(directory, callback_ttl_seconds=3600)
+        await fresh.bootstrap()
+        fresh._data.setdefault("groups", {})[origin] = {"seen_at": 1}
+        new_nonce, _ = await fresh.issue_ephemeral_card(origin, _lobby_card(), "s")
+
+        # The old instance flushes for an unrelated reason, after the reload.
+        old._write_atomic(old._data)
+
+        reader = PanelStore(directory, callback_ttl_seconds=3600)
+        await reader.bootstrap()
+        table = reader._data["ephemeral_cards"]
+        assert old_nonce in table, "旧卡不该消失"
+        assert new_nonce in table, "重载后发的卡被旧实例覆盖了"
+    asyncio.run(scenario())
+
+
+def test_a_card_issued_after_reload_is_still_clickable():
+    """The symptom users actually saw."""
+    async def scenario():
+        directory = Path(tempfile.mkdtemp())
+        origin = "qq_official:GroupMessage:G1"
+
+        old = PanelStore(directory, callback_ttl_seconds=3600)
+        await old.bootstrap()
+        old._data.setdefault("groups", {})[origin] = {"seen_at": 1}
+        await old.issue_ephemeral_card(origin, _lobby_card(), "s")
+
+        fresh = PanelStore(directory, callback_ttl_seconds=3600)
+        await fresh.bootstrap()
+        fresh._data.setdefault("groups", {})[origin] = {"seen_at": 1}
+        nonce, _ = await fresh.issue_ephemeral_card(origin, _lobby_card(), "s")
+
+        old._write_atomic(old._data)
+
+        # Either instance may receive the interaction; both must honour it.
+        await old.claim_ephemeral_click(origin, nonce, "go", "U1")
+        await fresh.claim_ephemeral_click(origin, nonce, "go", "U1")
+    asyncio.run(scenario())
+
+
+def test_merging_never_resurrects_a_consumed_one_shot():
+    """The writer's own view wins, so a spent button stays spent."""
+    async def scenario():
+        directory = Path(tempfile.mkdtemp())
+        origin = "qq_official:GroupMessage:G1"
+        card = ep.validate_card({
+            "id": "d", "markdown": "# d", "one_shot": True,
+            "rows": [[{"id": "go", "label": "go", "action_id": "demo.run"}]],
+        })
+
+        store = PanelStore(directory, callback_ttl_seconds=3600)
+        await store.bootstrap()
+        store._data.setdefault("groups", {})[origin] = {"seen_at": 1}
+        nonce, _ = await store.issue_ephemeral_card(origin, card, "s")
+        await store.claim_ephemeral_click(origin, nonce, "go", "U1")
+
+        with pytest.raises(ep.EphemeralError):
+            await store.claim_ephemeral_click(origin, nonce, "go", "U1")
+    asyncio.run(scenario())

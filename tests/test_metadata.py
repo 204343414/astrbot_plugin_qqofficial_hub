@@ -82,3 +82,35 @@ def test_every_page_has_an_entry_file():
     pages_root = Path(__file__).parents[1] / "pages"
     for page in (p for p in pages_root.iterdir() if p.is_dir()):
         assert (page / "index.html").is_file(), f"{page.name} 缺少 index.html"
+
+
+def test_every_module_used_in_main_is_imported():
+    """Guards against NameError at plugin load.
+
+    A missing import here is invisible in review and fatal at startup: the Hub
+    shipped with `image_host.ImageHost(...)` but no `import image_host`, so
+    every dependent plugin reported "Hub 未安装" until it was noticed. Checked
+    with the AST rather than by importing, because importing main.py needs the
+    whole AstrBot runtime.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    tree = ast.parse((root / "main.py").read_text("utf-8"))
+
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            bound.update(a.asname or a.name for a in node.names)
+        elif isinstance(node, ast.Import):
+            bound.update((a.asname or a.name).split(".")[0] for a in node.names)
+
+    # Names used as `something.attr` that match a Hub submodule on disk.
+    submodules = {p.stem for p in (root / "qqofficial_hub").glob("*.py")}
+    used = {
+        node.value.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+    }
+    missing = (used & submodules) - bound
+    assert not missing, f"main.py 用了却没 import: {sorted(missing)}"
