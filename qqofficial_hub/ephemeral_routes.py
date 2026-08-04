@@ -143,16 +143,39 @@ class EphemeralCardMixin:
         Returns "" when QQ does not report an id; callers should degrade to
         accepting un-quoted moves rather than blocking play.
         """
-        from .passive_reply import IMAGE_FILE_TYPE, _upload_media, real_msg_id
+        from .passive_reply import IMAGE_FILE_TYPE
+
+        return await self.send_media_message(
+            origin, image, IMAGE_FILE_TYPE, text=text, client=client,
+            event_id=event_id, msg_id=msg_id,
+        )
+
+    async def send_media_message(
+        self,
+        origin: str,
+        data: bytes,
+        file_type: int,
+        text: str = "",
+        client: Any = None,
+        event_id: str | None = None,
+        msg_id: str | None = None,
+    ) -> str:
+        """Upload any rich media and send it, returning the QQ message id.
+
+        ``file_type`` follows QQ's own numbering: 1 image, 2 video, 3 voice,
+        4 file. Voice accepts silk/wav/mp3/flac, so a synthesised chord can go
+        out on exactly the same path as a game board.
+        """
+        from .passive_reply import _upload_media, real_msg_id
 
         client = client or self._get_qq_client(origin)
         group_openid = origin.split(":", 2)[-1]
         uploaded = await _upload_media(
-            client, IMAGE_FILE_TYPE, "base64://" + base64.b64encode(image).decode(),
+            client, file_type, "base64://" + base64.b64encode(data).decode(),
             None, group_openid=group_openid,
         )
         if uploaded is None:
-            raise RuntimeError("图片上传失败")
+            raise RuntimeError("富媒体上传失败")
         payload: dict[str, Any] = {
             "group_openid": group_openid,
             "msg_type": 7,

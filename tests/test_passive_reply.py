@@ -7,6 +7,7 @@ proactive push, which requires the group owner to enable proactive messages and
 burns the 4-per-month proactive quota.
 """
 import asyncio
+import inspect
 import sys
 import types
 from types import SimpleNamespace
@@ -510,3 +511,59 @@ def test_message_id_is_read_from_whatever_shape_qq_returns():
     assert extract(SimpleNamespace(message_id="C")) == "C"
     assert extract(None) == ""
     assert extract({}) == ""
+
+
+# --- voice / arbitrary rich media -------------------------------------------
+
+def test_send_image_message_delegates_to_the_generic_media_path():
+    """Images are just file_type=1; voice must ride the same code."""
+    from qqofficial_hub.ephemeral_routes import EphemeralCardMixin
+
+    source = inspect.getsource(EphemeralCardMixin.send_image_message)
+    assert "send_media_message" in source
+    assert "IMAGE_FILE_TYPE" in source
+
+
+def test_send_media_message_accepts_the_voice_file_type():
+    """QQ numbers these itself: 1 image, 2 video, 3 voice, 4 file."""
+    from qqofficial_hub import passive_reply as pr
+
+    assert (pr.IMAGE_FILE_TYPE, pr.VIDEO_FILE_TYPE,
+            pr.RECORD_FILE_TYPE, pr.FILE_FILE_TYPE) == (1, 2, 3, 4)
+
+
+def test_media_send_uploads_then_references_the_file_info():
+    async def scenario():
+        from qqofficial_hub import passive_reply as pr
+        from qqofficial_hub.ephemeral_routes import EphemeralCardMixin
+
+        sends = []
+
+        async def post_group_message(**payload):
+            sends.append(payload)
+            return {"id": "MSG-VOICE"}
+
+        async def fake_upload(client, ft, src, name, *, group_openid="",
+                              user_openid=""):
+            fake_upload.file_type = ft
+            return {"file_info": "FI-VOICE"}
+
+        hub = object.__new__(EphemeralCardMixin)
+        hub._get_qq_client = lambda origin: SimpleNamespace(
+            api=SimpleNamespace(post_group_message=post_group_message))
+
+        original = pr._upload_media
+        pr._upload_media = fake_upload
+        try:
+            sent_id = await hub.send_media_message(
+                "qq_official:GroupMessage:G1", b"RIFF....", pr.RECORD_FILE_TYPE,
+                msg_id="M1",
+            )
+        finally:
+            pr._upload_media = original
+
+        assert fake_upload.file_type == pr.RECORD_FILE_TYPE
+        assert sent_id == "MSG-VOICE"
+        assert sends[0]["msg_type"] == 7
+        assert sends[0]["media"] == {"file_info": "FI-VOICE"}
+    asyncio.run(scenario())

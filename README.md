@@ -140,6 +140,14 @@ botpy 只把 **500/504** 映射成 `ServerError`（见其 `HttpErrorDict`），�
 
 对图片棋盘类插件这很关键：一次上传失败等于吃掉玩家的一整手棋。
 
+### 富媒体：图片 / 语音 / 视频
+
+`send_media_message(origin, data, file_type)` 按 QQ 自己的编号发送任意富媒体
+（1 图片、2 视频、3 语音、4 文件）。`send_image_message()` 现在只是它
+`file_type=1` 的薄封装，行为不变。
+
+语音接受 `silk/wav/mp3/flac`，所以合成的音频可以和棋盘图走完全相同的上传路径。
+
 ### 自动撤回被替代的卡片
 
 同一 `session_id` 再发一张卡片时，Hub 会**撤回它替代的那一条**，所以一局棋只在屏幕上
