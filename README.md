@@ -140,6 +140,33 @@ botpy 只把 **500/504** 映射成 `ServerError`（见其 `HttpErrorDict`），�
 
 对图片棋盘类插件这很关键：一次上传失败等于吃掉玩家的一整手棋。
 
+### 卡片内嵌图片（内置图床）
+
+QQ 的 Markdown 卡片**只能通过公网 URL 显示图片**（官方原文：「请使用可在公网访问的
+资源 url，开放平台会下载转存该资源」），而富媒体和 keyboard 又不能同条消息。
+所以「一张卡片里既有图又有按钮」只有走 URL 一条路。
+
+Hub 内置一个**只读**图床：
+
+```python
+url = hub.publish_image(png_bytes, slot=origin)   # 返回公网 URL
+hub.image_host_ready()                            # 没配好时让插件降级
+hub.retire_image_slot(origin)                     # 对局结束时释放
+```
+
+**每个 slot（通常是群）只保留最新一张**：棋盘每步重画，旧图会被顶掉。
+
+> ⚠️ 顶掉**不等于立刻删除**。腾讯是在**用户滑到那条消息时**才去抓图，不同的人
+> 抓的时机不同，同一张图可能被抓多次。发完即删会让群友看到裂图——这是社区已知的坑。
+> 所以旧图会再留 `image_host_grace_seconds`（默认 300 秒）才清掉。
+
+它**不能**挂在 AstrBot 的插件路由上：那条路径有 `Depends(require_plugin_scope)`，
+腾讯的抓图服务器没有登录态，必然 401。因此图床自己监听一个端口，无鉴权、
+只响应 GET、只返回自己写过的随机 token 文件。
+
+配置：`image_host_enabled` / `image_host_base_url` / `image_host_port` /
+`image_host_grace_seconds`。诊断页会显示「就绪 / 缺 base_url / 端口未监听」。
+
 ### 富媒体：图片 / 语音 / 视频
 
 `send_media_message(origin, data, file_type)` 按 QQ 自己的编号发送任意富媒体

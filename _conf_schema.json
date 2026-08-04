@@ -5,6 +5,26 @@
     "type": "int",
     "default": 24
   },
+  "image_host_enabled": {
+    "description": "开启内置图床，让卡片能内嵌图片（棋盘、钢琴图）。需要配合 Cloudflare Tunnel 等把本地端口暴露到公网。",
+    "type": "bool",
+    "default": false
+  },
+  "image_host_base_url": {
+    "description": "图床的公网地址，如 https://img.example.com（隧道指向本机 image_host_port）。留空则图床不可用。",
+    "type": "string",
+    "default": ""
+  },
+  "image_host_port": {
+    "description": "图床本地监听端口，默认 9527。隧道 ingress 指到这个端口。",
+    "type": "int",
+    "default": 9527
+  },
+  "image_host_grace_seconds": {
+    "description": "同一个群发出新图后，旧图再保留多久（秒），默认 300。QQ 是在用户滑到消息时才抓图，立刻删会让人看到裂图。",
+    "type": "int",
+    "default": 300
+  },
   "recall_superseded_cards": {
     "description": "同一会话发出新卡片/新棋盘后，自动撤回它替代的那一条，避免长对局刷屏。QQ 仅允许撤回 2 分钟内的消息，超时会静默跳过。",
     "type": "bool",

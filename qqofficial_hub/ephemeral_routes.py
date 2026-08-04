@@ -198,6 +198,28 @@ class EphemeralCardMixin:
                 return str(value)
         return ""
 
+    def publish_image(self, data: bytes, slot: str = "") -> str:
+        """Host an image publicly and return its URL. Public API for plugins.
+
+        ``slot`` is normally a group origin: publishing again into the same
+        slot retires the previous picture, so a board redrawn every move
+        leaves one file rather than one per turn.
+
+        Raises when the host is not configured -- callers should fall back to
+        sending a plain image message rather than failing the whole action.
+        """
+        return self.image_host.publish(data, slot=slot)
+
+    def image_host_ready(self) -> bool:
+        """Whether cards can embed images right now."""
+        host = getattr(self, "image_host", None)
+        return bool(host and host.configured and host.running)
+
+    def retire_image_slot(self, slot: str) -> None:
+        host = getattr(self, "image_host", None)
+        if host is not None:
+            host.retire_slot(slot)
+
     async def recall_message(self, origin: str, message_id: str,
                              client: Any = None, sent_at: float | None = None) -> bool:
         """Recall a message this bot sent. Public API for game/flow plugins.

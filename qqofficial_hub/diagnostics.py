@@ -26,6 +26,9 @@ REQUIRED_HUB_API = (
     "register_card_provider",
     "unregister_card_provider",
     "get_action_catalog",
+    "send_media_message",
+    "publish_image",
+    "image_host_ready",
     "actions",
 )
 
@@ -38,6 +41,7 @@ HUB_MODULES = (
     "ephemeral",
     "ephemeral_routes",
     "identity",
+    "image_host",
     "interaction_bridge",
     "issued_cards",
     "keyboard",
@@ -193,6 +197,30 @@ async def storage_report(store: Any) -> dict[str, Any]:
     }
 
 
+def image_host_report(plugin: Any) -> dict[str, Any]:
+    """Whether cards can embed images, and why not when they cannot.
+
+    Split into "enabled / configured / running" because those fail for
+    different reasons and need different fixes: a missing base URL is a
+    config typo, a stopped listener is a port clash, and neither looks like
+    the other in a log.
+    """
+    host = getattr(plugin, "image_host", None)
+    if host is None:
+        return {"enabled": False, "error": "未初始化"}
+    status = host.status()
+    status["enabled"] = bool(getattr(plugin, "image_host_enabled", False))
+    if not status["enabled"]:
+        status["hint"] = "未开启：配置里打开 image_host_enabled"
+    elif not status["configured"]:
+        status["hint"] = "缺少 image_host_base_url（隧道的公网域名）"
+    elif not status["running"]:
+        status["hint"] = f"端口 {status['port']} 未监听，可能被占用"
+    else:
+        status["hint"] = "就绪"
+    return status
+
+
 async def build_report(plugin: Any) -> dict[str, Any]:
     """Full diagnostics payload. Never raises: a broken section reports itself."""
     report: dict[str, Any] = {}
@@ -202,6 +230,7 @@ async def build_report(plugin: Any) -> dict[str, Any]:
         "actions": lambda: action_report(plugin),
         "providers": lambda: provider_report(plugin),
         "bridge": lambda: bridge_report(plugin),
+        "image_host": lambda: image_host_report(plugin),
     }
     for key, build in sections.items():
         try:

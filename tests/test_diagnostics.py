@@ -26,6 +26,9 @@ def _plugin():
         end_ephemeral_session=lambda *a, **k: None,
         register_card_provider=lambda *a, **k: None,
         unregister_card_provider=lambda *a, **k: None,
+        send_media_message=lambda *a, **k: None,
+        publish_image=lambda *a, **k: "",
+        image_host_ready=lambda: False,
     )
     return plugin, registry, store
 
@@ -120,3 +123,32 @@ def test_storage_counts_live_versus_expired_cards():
         assert report["ephemeral_cards_live"] == 1
         assert report["ephemeral_sessions_live"] == 1
     asyncio.run(scenario())
+
+
+def test_image_host_status_explains_what_to_fix():
+    """Enabled / configured / running fail for different reasons and need
+    different fixes; one boolean would hide which."""
+    from types import SimpleNamespace
+
+    off = SimpleNamespace(image_host_enabled=False, image_host=SimpleNamespace(
+        status=lambda: {"configured": False, "running": False, "port": 9527}))
+    assert "未开启" in diag.image_host_report(off)["hint"]
+
+    no_url = SimpleNamespace(image_host_enabled=True, image_host=SimpleNamespace(
+        status=lambda: {"configured": False, "running": False, "port": 9527}))
+    assert "base_url" in diag.image_host_report(no_url)["hint"]
+
+    not_listening = SimpleNamespace(
+        image_host_enabled=True, image_host=SimpleNamespace(
+            status=lambda: {"configured": True, "running": False, "port": 9527}))
+    assert "9527" in diag.image_host_report(not_listening)["hint"]
+
+    ready = SimpleNamespace(image_host_enabled=True, image_host=SimpleNamespace(
+        status=lambda: {"configured": True, "running": True, "port": 9527}))
+    assert diag.image_host_report(ready)["hint"] == "就绪"
+
+
+def test_a_missing_image_host_does_not_crash_the_report():
+    from types import SimpleNamespace
+
+    assert diag.image_host_report(SimpleNamespace())["enabled"] is False

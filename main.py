@@ -31,7 +31,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.18.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.19.0", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -77,16 +77,40 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         self.require_known_clicker = bool(config.get("require_known_clicker", True))
         self.show_clicker_name = bool(config.get("show_clicker_name", True))
         self.identities = identity.IdentityBook(self.store)
+        # Cards can only show a picture through a public URL, so an optional
+        # local host serves them. Off by default: it opens a port, which is a
+        # thing to opt into rather than inherit.
+        self.image_host = image_host.ImageHost(
+            StarTools.get_data_dir(PLUGIN_NAME),
+            base_url=str(config.get("image_host_base_url", "") or ""),
+            port=int(config.get("image_host_port", 9527) or 9527),
+            grace_seconds=int(config.get("image_host_grace_seconds", 300) or 300),
+        )
+        self.image_host_enabled = bool(config.get("image_host_enabled", False))
         if self.experimental_bridge:
             self.bridge_generation = interaction_bridge.install(PLUGIN_NAME, self._handle_interaction)
 
     async def initialize(self) -> None:
+        if self.image_host_enabled:
+            if not self.image_host.configured:
+                logger.warning(
+                    "[QQHub] 图床已开启但未填 image_host_base_url，卡片内嵌图片不可用"
+                )
+            else:
+                try:
+                    await self.image_host.start()
+                except Exception:
+                    logger.exception("[QQHub] 图床启动失败")
         if self.experimental_bridge:
             logger.warning("[QQHub] Experimental callback test is enabled. Use only after a full AstrBot restart.")
         else:
             logger.info("[QQHub] Editor loaded. Experimental callback bridge is disabled.")
 
     async def terminate(self) -> None:
+        try:
+            await self.image_host.stop()
+        except Exception:
+            logger.warning("[QQHub] 图床关闭失败")
         self.actions.unregister_owner(PLUGIN_NAME)
         self.actions.unregister_owner(f"{PLUGIN_NAME}.commands")
         if self.experimental_bridge:
