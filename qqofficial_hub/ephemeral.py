@@ -150,8 +150,14 @@ def _validate_button(value: object) -> dict[str, Any]:
         raise EphemeralError("按钮 ID 含非法字符")
     action_id = str(value.get("action_id") or "").strip()
     next_card = str(value.get("next_card") or "").strip()
-    if not action_id and not next_card:
-        raise EphemeralError("按钮必须指定 action_id 或 next_card")
+    # An insert button is QQ's action.type=2: tapping appends text to the
+    # input box and sends nothing. It needs no server round trip, so it must
+    # not be forced to carry an action_id it would never invoke.
+    insert_text = str(value.get("insert_text") or "")
+    if insert_text and len(insert_text) > 100:
+        raise EphemeralError("insert_text 最长 100 字符")
+    if not action_id and not next_card and not insert_text:
+        raise EphemeralError("按钮必须指定 action_id、next_card 或 insert_text")
     if action_id and not CARD_ID_RE.fullmatch(action_id):
         raise EphemeralError("action_id 含非法字符")
     if next_card and not CARD_ID_RE.fullmatch(next_card):
@@ -170,6 +176,7 @@ def _validate_button(value: object) -> dict[str, Any]:
         "style": style,
         "action_id": action_id,
         "next_card": next_card,
+        "insert_text": insert_text,
         "params": params,
         # Button-level one-shot: only this button retires, card stays usable.
         "one_shot": bool(value.get("one_shot", False)),
@@ -290,14 +297,36 @@ def apply_consumption(record: dict[str, Any], button: dict[str, Any]) -> None:
 def to_keyboard_rows(card: dict[str, Any], nonce: str) -> list[dict[str, Any]]:
     """Render to QQ keyboard payload.
 
-    All ephemeral buttons are type=1 callbacks: the click must reach the server
-    so one-shot and ownership can be enforced. ``button_data`` stays opaque --
-    real parameters live in the server-side snapshot.
+    Most ephemeral buttons are type=1 callbacks: the click must reach the
+    server so one-shot and ownership can be enforced, and ``button_data``
+    stays opaque -- real parameters live in the server-side snapshot.
+
+    A button carrying ``insert_text`` is emitted as **type=2** instead: QQ
+    appends that text to the input box and sends nothing. That costs no
+    round trip and no passive-reply budget, which is what makes it usable for
+    things tapped many times in a row (an accidental, a note length) where a
+    callback's latency and message cost would both be wrong.
     """
     rows = []
     for row in card.get("rows", []):
         buttons = []
         for item in row:
+            insert_text = item.get("insert_text") or ""
+            if insert_text:
+                action = {
+                    "type": 2,
+                    "permission": {"type": 2},
+                    "data": insert_text,
+                    "enter": False,
+                    "unsupport_tips": item["unsupport_tips"],
+                }
+            else:
+                action = {
+                    "type": 1,
+                    "permission": {"type": 2},
+                    "data": f"qqhub:e1:{nonce}:{item['id']}",
+                    "unsupport_tips": item["unsupport_tips"],
+                }
             buttons.append({
                 "id": item["id"],
                 "render_data": {
@@ -305,12 +334,7 @@ def to_keyboard_rows(card: dict[str, Any], nonce: str) -> list[dict[str, Any]]:
                     "visited_label": item["visited_label"],
                     "style": item["style"],
                 },
-                "action": {
-                    "type": 1,
-                    "permission": {"type": 2},
-                    "data": f"qqhub:e1:{nonce}:{item['id']}",
-                    "unsupport_tips": item["unsupport_tips"],
-                },
+                "action": action,
             })
         rows.append({"buttons": buttons})
     return rows

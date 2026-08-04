@@ -300,3 +300,66 @@ def test_bind_initiator_is_noop_without_initiator_mode():
                              "rows": [[{"id": "a", "label": "A", "action_id": "x"}]]})
     assert ep.bind_initiator(card, "") == card
 
+
+
+# --- type=2 insert buttons --------------------------------------------------
+#
+# An accidental or a note length is tapped repeatedly while composing. As a
+# type=1 callback each tap costs a server round trip *and* a passive reply,
+# so five taps exhaust the five-message budget. type=2 appends text locally
+# and costs nothing.
+
+def test_insert_buttons_are_emitted_as_type_two():
+    from qqofficial_hub import ephemeral as ep
+
+    card = ep.validate_card({
+        "id": "t", "markdown": "# t",
+        "rows": [[{"id": "sharp", "label": "♯", "insert_text": "#"}]],
+    })
+    rows = ep.to_keyboard_rows(card, "NONCE")
+    action = rows[0]["buttons"][0]["action"]
+    assert action["type"] == 2
+    assert action["data"] == "#"
+    assert action["enter"] is False, "必须只插入不发送"
+
+
+def test_callback_buttons_are_still_type_one():
+    from qqofficial_hub import ephemeral as ep
+
+    card = ep.validate_card({
+        "id": "t", "markdown": "# t",
+        "rows": [[{"id": "go", "label": "go", "action_id": "demo.run"}]],
+    })
+    action = ep.to_keyboard_rows(card, "NONCE")[0]["buttons"][0]["action"]
+    assert action["type"] == 1
+    assert action["data"].startswith("qqhub:e1:NONCE:")
+
+
+def test_an_insert_button_needs_no_action_id():
+    """Requiring one would force a callback that is never invoked."""
+    from qqofficial_hub import ephemeral as ep
+
+    ep.validate_card({
+        "id": "t", "markdown": "# t",
+        "rows": [[{"id": "s", "label": "♯", "insert_text": "#"}]],
+    })
+
+
+def test_a_button_with_nothing_to_do_is_still_refused():
+    from qqofficial_hub import ephemeral as ep
+
+    with pytest.raises(ep.EphemeralError, match="insert_text"):
+        ep.validate_card({
+            "id": "t", "markdown": "# t",
+            "rows": [[{"id": "x", "label": "x"}]],
+        })
+
+
+def test_insert_text_is_length_capped_like_qq_requires():
+    from qqofficial_hub import ephemeral as ep
+
+    with pytest.raises(ep.EphemeralError, match="100"):
+        ep.validate_card({
+            "id": "t", "markdown": "# t",
+            "rows": [[{"id": "x", "label": "x", "insert_text": "y" * 101}]],
+        })
