@@ -255,3 +255,17 @@ def test_formatting_never_explodes_on_a_section_that_failed():
         "storage": {}, "identities": {}, "healthy": False,
     })
     assert "未初始化" in text
+
+
+def test_known_managers_are_reported():
+    """A group_manager button refusing everyone usually means no admin has
+    spoken yet, not that the check is broken. The count distinguishes them."""
+    text = diag.format_report(_report(
+        identities={"seen": 4, "named": 2, "managers": 1,
+                    "roles": {"admin": 1, "member": 3}},
+    ))
+    assert "管理 1 人" in text
+
+
+def test_having_no_known_manager_is_stated_plainly():
+    assert "暂无已知管理" in diag.format_report(_report())

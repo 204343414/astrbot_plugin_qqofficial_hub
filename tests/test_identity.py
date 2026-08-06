@@ -1,5 +1,6 @@
 """Identity book: names come only from messages, and gate button access."""
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 import tempfile
@@ -11,6 +12,7 @@ from qqofficial_hub.store import PanelStore
 
 ORIGIN = "qq_official:GroupMessage:G1"
 ALICE = "15CB6AB7A714145630DF8DEBD0CA9294"
+BOB = "BE4A096E28B40FEDEB3320E5E8D7C2A7"
 
 
 def _book():
@@ -154,15 +156,25 @@ def test_header_is_derived_automatically_when_not_supplied():
     assert "if clicker_header is None:" in source, "显式传 '' 应能抑制顶部行"
 
 
-def test_group_scene_provides_no_nickname_by_design():
-    """Documented reality check, verified against botpy 1.2.1.
+def test_the_module_documents_where_identity_data_actually_comes_from():
+    """This docstring used to assert QQ never sends a group nickname.
 
-    GroupMessage._User exposes only ``member_openid`` -- no ``username`` -- and
-    every member-lookup endpoint in the API is guild-only. Any code that expects
-    a group nickname from QQ is built on a false premise.
+    That was true of botpy 1.2.1's parser and false of QQ itself: the
+    documented GROUP_AT_MESSAGE_CREATE payload carries ``username`` *and*
+    ``member_role``, and AstrBot patches the class to read the former. The
+    library's blind spot got written down as a property of the platform,
+    which is the kind of mistake that stops anyone re-checking for years.
+
+    What must stay documented is the real constraint: a click carries no
+    identity at all, so a click can only be attributed by remembering an
+    earlier message.
     """
     doc = identity.__doc__ or ""
-    assert "never sends a nickname in the group scene" in doc
+    assert "member_role" in doc
+    assert "INTERACTION_CREATE" in doc
+    assert "never sends a nickname in the group scene" not in doc, (
+        "旧结论已被官方文档推翻，不要留在文档里"
+    )
 
 
 # --- self-declared nicknames -------------------------------------------------
@@ -246,3 +258,158 @@ def test_raw_payload_fallback_finds_a_nickname():
         message_obj = None
 
     assert extract(Empty()) == ""
+
+
+# --- group roles ------------------------------------------------------------
+#
+# author.member_role is documented on GROUP_AT_MESSAGE_CREATE but parsed by
+# neither botpy 1.2.1 nor AstrBot's patched subclass, so it has to be read off
+# the preserved raw payload. These tests are built from the payload shapes in
+# the official docs rather than from what the objects happen to expose.
+
+def _event(author: dict, with_raw: bool = True):
+    """Mimic AstrBot's event object closely enough to exercise extraction."""
+    class _Author:
+        def __init__(self, data):
+            # Exactly what AstrBot's PatchedGroupMessage._User parses --
+            # note the absence of member_role, which is the whole point.
+            self.id = data.get("id")
+            self.username = data.get("username")
+            self.member_openid = data.get("member_openid")
+
+    raw_message = SimpleNamespace(author=_Author(author))
+    if with_raw:
+        raw_message.raw_data = {"author": author}
+    return SimpleNamespace(message_obj=SimpleNamespace(raw_message=raw_message))
+
+
+def test_the_role_is_read_from_the_documented_payload():
+    """Example 3 in the official docs, verbatim."""
+    event = _event({
+        "id": "D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1",
+        "member_openid": "D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1",
+        "member_role": "owner",
+        "username": "小华",
+        "bot": False,
+    })
+    assert identity.role_from_event(event) == identity.ROLE_OWNER
+
+
+def test_every_documented_role_value_is_recognised():
+    for role in ("member", "admin", "owner"):
+        assert identity.role_from_event(_event({"member_role": role})) == role
+
+
+def test_a_missing_role_is_empty_rather_than_a_guess():
+    """Interaction events carry no author at all. Inventing 'member' would
+    make 'definitely not an admin' indistinguishable from 'no idea yet'."""
+    assert identity.role_from_event(_event({"member_openid": "X"})) == ""
+    assert identity.role_from_event(SimpleNamespace()) == ""
+
+
+def test_an_unexpected_role_value_is_rejected_not_stored():
+    assert identity.role_from_event(_event({"member_role": "superadmin"})) == ""
+
+
+def test_the_role_is_not_read_off_the_parsed_object_alone():
+    """botpy 1.2.1 does not define member_role on GroupMessage._User, and
+    AstrBot's patch does not add it. Code reading the attribute would get
+    None forever -- which looks exactly like 'nobody is an admin'."""
+    event = _event({"member_role": "admin"}, with_raw=False)
+    assert not hasattr(event.message_obj.raw_message.author, "member_role")
+    assert identity.role_from_event(event) == ""
+
+
+def test_the_owner_counts_as_a_manager():
+    """QQ reports the owner as 'owner', never 'admin'. Checking only for
+    'admin' would lock out the one person who most obviously qualifies."""
+    assert identity.ROLE_OWNER in identity.MANAGER_ROLES
+    assert identity.ROLE_ADMIN in identity.MANAGER_ROLES
+    assert identity.ROLE_MEMBER not in identity.MANAGER_ROLES
+
+
+def test_a_remembered_role_can_be_read_back():
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.remember(ORIGIN, ALICE, "小明", role="admin")
+        assert await book.role_of(ORIGIN, ALICE) == "admin"
+        assert await book.is_group_manager(ORIGIN, ALICE) is True
+    asyncio.run(scenario())
+
+
+def test_a_plain_member_is_not_a_manager():
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.remember(ORIGIN, ALICE, "小明", role="member")
+        assert await book.is_group_manager(ORIGIN, ALICE) is False
+    asyncio.run(scenario())
+
+
+def test_someone_never_seen_has_no_role_and_is_no_manager():
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        assert await book.role_of(ORIGIN, BOB) == ""
+        assert await book.is_group_manager(ORIGIN, BOB) is False
+    asyncio.run(scenario())
+
+
+def test_a_later_message_without_a_role_does_not_demote_an_admin():
+    """The dangerous case. Roles arrive only on messages, and several call
+    sites pass none; treating that as a demotion would strip an admin of
+    their permissions the moment anything else touched their record.
+    """
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.remember(ORIGIN, ALICE, "小明", role="admin")
+        await book.remember(ORIGIN, ALICE, "小明")        # no role this time
+        assert await book.is_group_manager(ORIGIN, ALICE) is True
+    asyncio.run(scenario())
+
+
+def test_a_real_demotion_is_recorded():
+    """The flip side: when QQ *does* say 'member', that must stick, or a
+    demoted admin would keep their buttons forever."""
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.remember(ORIGIN, ALICE, "小明", role="owner")
+        await book.remember(ORIGIN, ALICE, "小明", role="member")
+        assert await book.is_group_manager(ORIGIN, ALICE) is False
+    asyncio.run(scenario())
+
+
+def test_a_promotion_is_picked_up_without_clearing_the_name():
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.set_name(ORIGIN, ALICE, "小明")
+        await book.remember(ORIGIN, ALICE, "", role="admin")
+        assert await book.name_of(ORIGIN, ALICE) == "小明"
+        assert await book.is_group_manager(ORIGIN, ALICE) is True
+    asyncio.run(scenario())
+
+
+def test_a_garbage_role_is_never_stored():
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.remember(ORIGIN, ALICE, "小明", role="root")
+        assert await book.role_of(ORIGIN, ALICE) == ""
+    asyncio.run(scenario())
+
+
+def test_roles_do_not_leak_between_groups():
+    """An admin of one group is an ordinary member of another; the book is
+    keyed per origin precisely so that stays true."""
+    other = "qq_official:GroupMessage:G2"
+
+    async def scenario():
+        book, store = _book()
+        await store.bootstrap()
+        await book.remember(ORIGIN, ALICE, "小明", role="owner")
+        assert await book.is_group_manager(other, ALICE) is False
+    asyncio.run(scenario())

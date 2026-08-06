@@ -415,12 +415,19 @@ class PanelStore:
             return None
 
     async def remember_identity(
-        self, key: str, name: str, ttl_seconds: int, keep_existing_name: bool = False
+        self, key: str, name: str, ttl_seconds: int, keep_existing_name: bool = False,
+        role: str = "",
     ) -> bool:
-        """Store the latest nickname for an OpenID. True when it changed.
+        """Store the latest nickname and role for an OpenID. True when changed.
 
         ``keep_existing_name`` protects a self-declared name from being wiped by
         the empty nickname QQ sends on every group message.
+
+        ``role`` is only ever *upgraded in place*: an empty value keeps what
+        was already known. Roles arrive on messages but never on button
+        clicks, and several code paths call this without one -- treating a
+        missing role as "demoted to member" would silently strip an admin of
+        their permissions the moment they pressed anything.
         """
         import time
         from . import identity
@@ -438,9 +445,14 @@ class PanelStore:
             prior = table.get(key) if isinstance(table.get(key), dict) else {}
             if keep_existing_name and not str(name):
                 name = str(prior.get("name") or "")
-            changed = str(prior.get("name") or "") != str(name)
+            resolved_role = str(role or "") or str(prior.get("role") or "")
+            changed = (
+                str(prior.get("name") or "") != str(name)
+                or str(prior.get("role") or "") != resolved_role
+            )
             table[key] = {
                 "name": str(name),
+                "role": resolved_role,
                 "seen_at": now,
                 "expires_at": now + int(ttl_seconds),
             }

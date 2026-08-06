@@ -292,23 +292,64 @@ Interaction(self.api, payload.get('id'), payload.get('d', {}))
 `平台ID:...` 为前缀的数据分片。
 
 
-## 12. 群场景拿不到昵称（botpy 1.2.1 核实）
+## 12. 群消息的 author：昵称与角色（已修正）
+
+**这一节以前是错的**，现予更正，因为错得很有代表性：早期版本断言「QQ 群场景永远
+不给昵称」，理由是 botpy 的解析结果里没有。那是把**库的盲区当成了平台的属性**——
+这种结论一旦写进文档，就再没人回头核实了。
+
+官方 `GROUP_AT_MESSAGE_CREATE` 事件体里，`author` 实际有这些字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `member_openid` | 群成员 OpenID |
+| `username` | **用户昵称**（确实有） |
+| `member_role` | **群内角色**：`member` / `admin` / `owner` |
+| `id` / `bot` / `union_openid` | 其余标识 |
+
+但**库不解析**，这才是真正的约束：
 
 ```python
+# botpy 1.2.1 —— 只读一个字段
 class GroupMessage(BaseMessage):
     class _User:
         def __init__(self, data):
-            self.member_openid = data.get("member_openid", None)   # 仅此一项
+            self.member_openid = data.get("member_openid", None)
 ```
 
-- 群消息事件的 `author` **没有** `username`；
-- `INTERACTION_CREATE` 只有 `group_member_openid`；
-- `botpy.BotAPI` 里 `get_guild_member` / `get_guild_members` 等**全部是频道接口**，
-  不存在「按 group_openid + member_openid 查昵称」的能力。
+AstrBot v4.26.7 打了补丁（`PatchedGroupMessage._User`），补上了
+`id` / `username` / `bot` / `avatar` / `user_openid` / `is_you`，
+**但没有 `member_role`**。
 
-**结论**：群聊里无法显示用户昵称，只能用稳定占位名。任何"从群消息取 username"的
-写法都会永远得到空串——AstrBot 适配器里的
-`getattr(message.author, "username", "")` 即是如此。
+所幸 AstrBot 同时保留了原始载荷：`_set_raw_message_fields()` 会写入
+`message.raw_data = data`。**所以角色要从 `raw_data["author"]["member_role"]` 取，
+不能读对象属性**——读属性会永远得到 `None`，而这跟「此人不是管理员」长得一模一样，
+是最阴险的一类 bug。Hub 的 `identity.role_from_event()` 已经封装好。
+
+### 关键不对称：点击不带身份
+
+| 事件 | member_openid | username | member_role |
+| --- | --- | --- | --- |
+| `GROUP_AT_MESSAGE_CREATE` | ✅ | ✅ | ✅ |
+| `INTERACTION_CREATE`（点按钮） | ✅ | ❌ | ❌ |
+
+而且 `botpy.BotAPI` 里 `get_guild_member` 之类**全是频道接口**，不存在
+「按 group_openid + member_openid 查昵称/角色」的能力。
+
+**结论**：点击本身无法判断身份，只能靠**记住此人之前发过的消息**。这正是
+`identity.IdentityBook` 存在的理由——它把「消息里见过一次」变成「点击时可查」。
+
+### 由此推出的权限设计
+
+`permission.type=1`（仅群管理可点）**只影响按钮怎么渲染**，官方契约里没有任何一句
+承诺「服务端不会收到非管理员的回调」。Hub 曾经据此假设不做校验，属于无据推断。
+现在 `group_manager` 策略在服务端用 `member_role` 真校验，且：
+
+- **角色未知 → 拒绝**。失败开放的权限检查不算权限检查；代价只是让对方在群里说一句话。
+- **群主算管理**。QQ 把群主报成 `owner` 而非 `admin`，只判 `admin` 会把最该有权限的人挡在外面。
+- **Hub 操作员 / AstrBot 管理员无条件放行**，否则刚重启的群可能没人能点管理按钮。
+- **缺失的角色不覆盖已知角色**。角色只在消息里出现，很多调用路径没有它；
+  把「这次没带」当成「降级为普通成员」会在管理员一点按钮时就剥夺其权限。
 
 ## 撤回消息
 
@@ -319,8 +360,16 @@ class GroupMessage(BaseMessage):
 | 子频道 | `DELETE /channels/{channel_id}/messages/{message_id}`（botpy 有 `recall_message`） |
 
 - **发送超出 2 分钟的消息不可撤回**（官方原文）。
-- 只能撤回**机器人自己发的**消息。
-- 成功返回 HTTP 200。
+- **只能撤回机器人自己发的消息，撤不了群友的。** 官方页面第一句就是
+  「撤回**机器人发送在当前群**的消息」，错误码表里还有 `40062003 无操作权限`。
+  官方 Bot 在群里没有管理员身份，腾讯不会把管群的权力交给第三方 Bot——
+  这跟 NapCat 那种「Bot 本身就是群管理」的路子是两回事。
+  **所以防刷屏只能从源头做**（少发、发新撤旧、用 type=2 不产生多余消息），
+  没有「帮群友撤消息」这条路。
+- 接口频率限制 **10 QPS**。
+- 成功返回 HTTP 200，**无响应体**。
+- 错误码：`40061001` 参数无效／`40062003` 无操作权限／`40064004` 超出 2 分钟／
+  `50065001` 撤回失败可重试。
 - **botpy 1.2.1 只实现了子频道版本**（`api.py: recall_message` 走 `/channels/...`），
   群聊与单聊没有封装，必须自己拼 `Route`。Hub 的 `passive_reply.recall_message()`
   已经做了这件事。

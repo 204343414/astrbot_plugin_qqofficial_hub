@@ -38,7 +38,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.21.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.22.0", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -153,9 +153,12 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
                 # Some adapter versions expose the nickname only on the raw
                 # payload. Dig it out rather than losing the one chance we get.
                 sender_name = self._nickname_from_raw(event)
+            # The role only ever arrives on a message. A click carries none,
+            # so this is the single opportunity to learn it.
+            role = identity.role_from_event(event)
             try:
                 changed = await self.identities.remember(
-                    origin, sender_id, sender_name
+                    origin, sender_id, sender_name, role=role
                 )
                 if changed and sender_name:
                     logger.info(
@@ -521,6 +524,37 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
             member_openid[-8:],
         )
 
+    async def _clicker_is_manager(self, origin: str, member_openid: str) -> bool:
+        """Whether a clicker may use a ``group_manager`` button.
+
+        The role is learned from messages and cached, because a click carries
+        no identity of its own. That leaves one awkward case: somebody who has
+        never spoken since the Hub started has no known role.
+
+        Unknown is treated as **not** a manager. A permission check that fails
+        open is not a permission check, and the recovery is cheap -- say
+        anything in the group once and the role is recorded. Operators and
+        AstrBot admins are allowed through regardless, so a group where nobody
+        has spoken yet cannot lock its own administrators out of the panel.
+        """
+        member = str(member_openid or "")
+        if member and member in self.operator_openids:
+            return True
+        if self._is_astrbot_admin_openid(member, origin):
+            return True
+        try:
+            if await self.identities.is_group_manager(origin, member):
+                return True
+            role = await self.identities.role_of(origin, member)
+        except Exception:
+            logger.exception("[QQHub] Role lookup failed; refusing the click")
+            return False
+        logger.info(
+            "[QQHub] Refused group_manager button: member=%s role=%s",
+            member[-6:], role or "未知（该用户还没在本群说过话）",
+        )
+        return False
+
     @staticmethod
     def _command_action_id(command: str) -> str:
         digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
@@ -815,8 +849,14 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         policy = button["permission"]
         if policy == "specified_users" and member not in button["specified_users"]:
             return 4
-        # group_manager is enforced by QQ before callback delivery. Policies
-        # without a QQ-native equivalent are verified here using OpenID.
+        # group_manager used to rely on QQ refusing the click client-side.
+        # permission.type=1 governs how the button *renders*; nothing in the
+        # documented contract promises the callback is withheld, and the Hub
+        # never verified it. Now that GROUP_AT_MESSAGE_CREATE carries
+        # author.member_role, check it for real -- see _clicker_is_manager
+        # for what happens when the role is not yet known.
+        if policy == "group_manager" and not await self._clicker_is_manager(origin, member):
+            return 4
         if policy == "astrbot_admin" and not self._is_astrbot_admin_openid(member, origin):
             return 4
         if policy == "operator" and member not in self.operator_openids:

@@ -170,10 +170,20 @@ async def identity_report(store: Any) -> dict[str, Any]:
         if isinstance(item, dict) and int(item.get("expires_at", 0)) > now
     ]
     named = [item for item in entries if str(item.get("name") or "").strip()]
+    roles: dict[str, int] = {}
+    for item in entries:
+        role = str(item.get("role") or "").strip()
+        if role:
+            roles[role] = roles.get(role, 0) + 1
     return {
         "seen": len(entries),
         "named": len(named),
         "samples": [str(item.get("name")) for item in named[:5]],
+        # Roles are only learned from messages, so a group_manager button
+        # refusing everyone usually means nobody has spoken yet rather than
+        # that the check is broken. Showing the counts makes that visible.
+        "roles": roles,
+        "managers": roles.get("admin", 0) + roles.get("owner", 0),
     }
 
 
@@ -328,10 +338,13 @@ def format_report(report: dict[str, Any]) -> str:
     )
 
     identities = report.get("identities") or {}
-    lines.append(
+    identity_line = (
         f"身份 见过 {identities.get('seen', 0)} 人"
         f"／有昵称 {identities.get('named', 0)} 人"
     )
+    managers = int(identities.get("managers", 0) or 0)
+    identity_line += f"／管理 {managers} 人" if managers else "／暂无已知管理"
+    lines.append(identity_line)
 
     head = "✅ Hub 自检通过" if report.get("healthy") else "⚠️ Hub 自检有问题"
     return head + "\n" + "\n".join(lines)
