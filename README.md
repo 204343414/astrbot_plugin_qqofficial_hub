@@ -211,10 +211,14 @@ GET http://127.0.0.1:20241/quicktunnel
 {"hostname":"accent-owns-equally-expo.trycloudflare.com"}
 ```
 
-> **有自己的域名就别用快速隧道。** 具名隧道域名固定，`image_host_base_url`
-> 一次填死，「换域名」这类故障彻底消失。而且**不需要 `cert.pem`**——
-> 面板建隧道拿 token 即可，`tunnel run --token eyJ...`，不用 `tunnel login`。
-> 完整步骤见 [docs/NAMED_TUNNEL_SETUP.md](docs/NAMED_TUNNEL_SETUP.md)。
+> **有自己的域名就别用快速隧道。** 快速隧道有两种独立的死法，都实测遇到过：
+> 重启换名（旧卡片的图当场全裂），以及域名直接失效（进程还 `Up`，DNS 已
+> `NXDOMAIN`）。具名隧道域名固定，`image_host_base_url` 一次填死，两个问题都消失。
+>
+> **不需要公网 IP，也不需要服务器**——cloudflared 是主动向外建连接的。
+> 两种搭法（面板托管 / 命令行）见
+> [docs/NAMED_TUNNEL_SETUP.md](docs/NAMED_TUNNEL_SETUP.md)，
+> 里面也解释了 `cert.pem` 报错到底是怎么回事。
 
 #### 换了域名会自愈，不需要人管
 
