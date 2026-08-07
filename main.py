@@ -38,7 +38,7 @@ from .web import HubWebController
 PLUGIN_NAME = "astrbot_plugin_qqofficial_hub"
 
 
-@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.23.0", "204343414")
+@register(PLUGIN_NAME, "QQ Official Hub", "QQ 官方机器人 Keyboard 面板与 Interaction 安全中枢。", "0.23.1", "204343414")
 class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -107,8 +107,9 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
                 await self.image_host.discover_base_url()
             if not self.image_host.configured:
                 logger.warning(
-                    "[QQHub] 图床已开启但拿不到公网地址：填 image_host_base_url，"
-                    "或让本机 cloudflared 的 metrics 端口(%d)可访问",
+                    "[QQHub] 图床暂时拿不到公网地址（cloudflared 没在跑？），"
+                    "将每分钟自动重试；也可直接填 image_host_base_url。"
+                    "metrics 端口=%d",
                     self.image_host.metrics_port,
                 )
             else:
@@ -116,6 +117,12 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
                     await self.image_host.start()
                 except Exception:
                     logger.exception("[QQHub] 图床启动失败")
+            # Always supervise, including the failure path above. cloudflared
+            # and AstrBot start independently, so "the tunnel is not up yet"
+            # is an ordinary boot ordering rather than a fault -- and without
+            # a supervisor it used to need a manual plugin reload to notice
+            # the tunnel had come back.
+            self.image_host.ensure_supervisor()
         if self.experimental_bridge:
             logger.warning("[QQHub] Experimental callback test is enabled. Use only after a full AstrBot restart.")
         else:

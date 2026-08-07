@@ -308,7 +308,7 @@ class ImageHost:
             self._site = web.TCPSite(self._runner, "0.0.0.0", self.port)
             await self._site.start()
         setattr(builtins, _LIVE_KEY, self)
-        self._sweeper = asyncio.create_task(self._sweep_forever())
+        self.ensure_supervisor()
         logger.info("[QQHub] Image host listening on :%d -> %s",
                     self.port, self.base_url or "(未配置公网地址)")
 
@@ -347,8 +347,17 @@ class ImageHost:
         deleting there broke every picture already sitting in a group.
         """
         if self._sweeper is not None:
-            self._sweeper.cancel()
+            sweeper = self._sweeper
             self._sweeper = None
+            sweeper.cancel()
+            # Await the cancellation. cancel() only *requests* it, so without
+            # this the task is still live when stop() returns -- and on a
+            # reload it would keep probing on behalf of a host that no longer
+            # owns the port.
+            try:
+                await sweeper
+            except (asyncio.CancelledError, Exception):
+                pass
         if self._runner is not None:
             await self._runner.cleanup()
         self._runner = None
@@ -459,6 +468,26 @@ class ImageHost:
 
     # --- cleanup ------------------------------------------------------------
 
+    def ensure_supervisor(self) -> None:
+        """Start the background keeper, even when the host is not up yet.
+
+        This used to be launched from ``start()``, which quietly created a
+        dead end: no public address meant no start, no start meant no
+        supervisor, and no supervisor meant nothing ever retried. Bringing
+        cloudflared back up therefore fixed nothing until somebody reloaded
+        the plugin by hand -- the bot could see the tunnel return and still
+        insist it was missing.
+
+        Idempotent, so callers need not track whether it is already running.
+        """
+        if self._sweeper is not None and not self._sweeper.done():
+            return
+        try:
+            self._sweeper = asyncio.create_task(self._sweep_forever())
+        except RuntimeError:
+            # No running loop yet (constructed outside async context).
+            self._sweeper = None
+
     async def _sweep_forever(self) -> None:
         while True:
             try:
@@ -474,6 +503,15 @@ class ImageHost:
                 # next card -- and the person who sends that card is the one
                 # who gets the broken image. Finding out first is free.
                 await self.ensure_reachable()
+                # Come up on our own once an address appears. A tunnel that
+                # was down at boot is the ordinary case, not an exception:
+                # cloudflared and AstrBot start independently.
+                if self.configured and not self.running:
+                    try:
+                        await self.start()
+                        logger.info("[QQHub] 图床已自动恢复：%s", self.base_url)
+                    except Exception:
+                        logger.warning("[QQHub] 图床自动恢复失败", exc_info=True)
             except asyncio.CancelledError:
                 break
             except Exception:

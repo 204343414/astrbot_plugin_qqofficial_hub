@@ -850,3 +850,75 @@ def test_a_normal_shutdown_still_cleans_up():
         return list(directory.glob("*"))
 
     assert asyncio.run(scenario()) == []
+
+
+# --- recovering without a human ---------------------------------------------
+
+def test_the_supervisor_runs_even_when_the_host_never_started():
+    """The dead end this fixes: no address -> no start -> no supervisor ->
+    nothing ever retries. Bringing cloudflared back up fixed nothing until
+    somebody reloaded the plugin by hand.
+    """
+    host = make_host()          # no base_url: cannot start
+
+    async def scenario():
+        assert host.running is False
+        host.ensure_supervisor()
+        alive = host._sweeper is not None and not host._sweeper.done()
+        await host.stop()
+        return alive
+
+    assert asyncio.run(scenario()) is True
+
+
+def test_the_supervisor_is_not_started_twice():
+    host = make_host()
+
+    async def scenario():
+        host.ensure_supervisor()
+        first = host._sweeper
+        host.ensure_supervisor()
+        same = host._sweeper is first
+        await host.stop()
+        return same
+
+    assert asyncio.run(scenario()) is True
+
+
+def test_the_host_comes_up_by_itself_once_a_tunnel_appears():
+    """cloudflared and AstrBot start independently, so a tunnel that is down
+    at boot is routine. Recovery must not require a human."""
+    host = make_host(port=_free_port(), recheck_seconds=0)
+    tunnel = _FakeTunnel("")            # nothing running yet
+    _with_tunnel(host, tunnel)
+
+    async def scenario():
+        assert await host.ensure_reachable() is False
+        assert host.running is False
+
+        tunnel.hostname = "late-arrival.trycloudflare.com"
+        # One supervisor pass, without waiting 60 seconds for the real timer.
+        await host.ensure_reachable()
+        if host.configured and not host.running:
+            await host.start()
+        try:
+            return host.running, host.base_url
+        finally:
+            await host.stop()
+
+    running, base = asyncio.run(scenario())
+    assert running is True
+    assert base == "https://late-arrival.trycloudflare.com"
+
+
+def test_stopping_cancels_the_supervisor():
+    """A leaked task would keep probing after shutdown."""
+    host = make_host()
+
+    async def scenario():
+        host.ensure_supervisor()
+        sweeper = host._sweeper
+        await host.stop()
+        return sweeper.cancelled() or sweeper.done()
+
+    assert asyncio.run(scenario()) is True
