@@ -486,18 +486,29 @@ def _with_tunnel(host, tunnel):
 
 
 def _bind(host, tunnel):
+    """Mirror the real discover_base_url, including its bookkeeping.
+
+    Notably it stamps ``_checked_at`` -- a fake that skipped it would make
+    the debounce untestable and, worse, look broken when it was not.
+    """
+    import time as _time
+
     async def discover():
         url = await tunnel()
         if url and url != host.base_url:
             if host.base_url:
                 host._rediscoveries += 1
             host.base_url = url
+        if url:
+            host._checked_at = _time.time()
         return url
     return discover
 
 
 def test_a_renamed_tunnel_is_picked_up_before_the_next_publish():
-    host = make_host()
+    # recheck_seconds=0: a real restart happens minutes apart, so the
+    # burst debounce is not what is under test here.
+    host = make_host(recheck_seconds=0)
     tunnel = _FakeTunnel("first.trycloudflare.com")
     _with_tunnel(host, tunnel)
 
@@ -531,7 +542,7 @@ def test_a_hand_written_base_url_is_never_overwritten():
 def test_a_dead_cloudflared_keeps_the_last_known_address():
     """Dropping the address would guarantee failure while only maybe being
     right -- the old tunnel may well still be serving."""
-    host = make_host()
+    host = make_host(recheck_seconds=0)
     tunnel = _FakeTunnel("first.trycloudflare.com")
     _with_tunnel(host, tunnel)
 
@@ -556,7 +567,7 @@ def test_a_renamed_tunnel_does_not_reuse_a_url_from_the_old_hostname():
     """Identical bytes normally reuse the existing URL, which is right until
     the hostname moves -- then that URL points nowhere and the picture is
     broken even though publishing 'succeeded'."""
-    host = make_host()
+    host = make_host(recheck_seconds=0)
     tunnel = _FakeTunnel("first.trycloudflare.com")
     _with_tunnel(host, tunnel)
     image = png()
@@ -640,3 +651,50 @@ def test_a_blank_config_falls_back_to_autodiscovery():
         host = make_host(base_url=blank)
         assert host.pinned is False, f"{blank!r} 不该被当成已配置"
         assert host.configured is False
+
+
+def test_a_confirmed_address_is_not_re_probed_on_every_call():
+    """One game turn asks twice: once to decide the feature is available,
+    once while publishing. Each probe can burn its full timeout on a wedged
+    cloudflared, and two of those against QQ's 12-second interaction budget
+    turns a working move into '请求第三方失败'.
+    """
+    host = make_host()
+    tunnel = _FakeTunnel("first.trycloudflare.com")
+    _with_tunnel(host, tunnel)
+
+    async def scenario():
+        await host.ensure_reachable()
+        await host.ensure_reachable()
+        await host.ensure_reachable()
+
+    asyncio.run(scenario())
+    assert tunnel.asked == 1, "同一次操作内不该反复探测隧道"
+
+
+def test_the_debounce_expires_so_a_rename_is_still_caught():
+    host = make_host(recheck_seconds=0)
+    tunnel = _FakeTunnel("first.trycloudflare.com")
+    _with_tunnel(host, tunnel)
+
+    async def scenario():
+        await host.ensure_reachable()
+        tunnel.hostname = "second.trycloudflare.com"
+        await host.ensure_reachable()
+        return host.base_url
+
+    assert asyncio.run(scenario()) == "https://second.trycloudflare.com"
+
+
+def test_an_unconfigured_host_always_probes():
+    """Debouncing a failure would strand a host that has no address yet."""
+    host = make_host()
+    tunnel = _FakeTunnel("")
+    _with_tunnel(host, tunnel)
+
+    async def scenario():
+        await host.ensure_reachable()
+        await host.ensure_reachable()
+
+    asyncio.run(scenario())
+    assert tunnel.asked == 2, "还没拿到地址时必须每次都试"

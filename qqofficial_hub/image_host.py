@@ -89,6 +89,7 @@ class ImageHost:
         max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
         metrics_host: str = "127.0.0.1",
         metrics_port: int = 20241,
+        recheck_seconds: float = 15.0,
     ) -> None:
         self.directory = Path(data_dir) / "images"
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -109,6 +110,10 @@ class ImageHost:
         self.max_age_seconds = max(int(max_age_seconds), 60)
         self.metrics_host = metrics_host or "127.0.0.1"
         self.metrics_port = int(metrics_port)
+        #: How long a confirmed address is trusted before re-probing. The
+        #: background sweeper re-checks every 60s regardless, so this only
+        #: collapses the bursts that happen inside one user action.
+        self.recheck_seconds = float(recheck_seconds)
 
         self._entries: dict[str, _Entry] = {}
         #: slot key (usually a group origin) -> the token currently live there.
@@ -210,6 +215,19 @@ class ImageHost:
         """
         if self.pinned:
             return self.configured
+        # Debounce. A single game turn asks twice -- once to decide whether
+        # the feature is available at all, once while publishing -- and each
+        # probe can burn its full timeout when cloudflared is wedged. Two
+        # 4-second stalls against QQ's 12-second interaction budget is enough
+        # to turn a working move into "请求第三方失败", so a recent answer is
+        # reused rather than re-derived.
+        now = time.time()
+        if (
+            self.configured
+            and self._checked_at
+            and (now - self._checked_at) < self.recheck_seconds
+        ):
+            return True
         before = self.base_url
         discovered = await self.discover_base_url()
         if not discovered:
@@ -371,6 +389,10 @@ class ImageHost:
             try:
                 await asyncio.sleep(60)
                 self.sweep()
+                # Force a real probe: the debounce exists to collapse bursts
+                # inside one user action, and honouring it here would mean the
+                # periodic check never actually checked anything.
+                self._checked_at = 0.0
                 # Re-check the lease even when nothing is being published.
                 # Publishing already verifies, but a tunnel that restarts
                 # during a quiet hour would otherwise stay broken until the
