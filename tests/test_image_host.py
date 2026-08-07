@@ -600,3 +600,43 @@ def test_an_unchanged_tunnel_still_reuses_the_url_for_identical_bytes():
 
     first, second = asyncio.run(scenario())
     assert first == second
+
+
+# --- a hand-configured base URL ---------------------------------------------
+#
+# Filling in a real domain is the fix for the quick tunnel's renaming, so the
+# config field has to survive the ways a URL actually gets typed.
+
+def test_a_pasted_url_with_stray_whitespace_still_works():
+    """The nastiest failure mode this class has.
+
+    An untrimmed value sets ``pinned`` (so autodiscovery stands down) while
+    leaving ``configured`` False (so nothing is ever served): a dead config
+    that logs no error and cannot heal itself. Copying a domain out of a
+    dashboard picks up a space often enough to matter.
+    """
+    host = make_host(base_url="  https://img.example.com  ")
+    assert host.base_url == "https://img.example.com"
+    assert host.pinned and host.configured
+
+
+def test_a_trailing_slash_does_not_double_up_in_urls():
+    host = make_host(base_url="https://img.example.com/")
+
+    async def scenario():
+        await host.start()
+        try:
+            return host.publish(png())
+        finally:
+            await host.stop()
+
+    assert "//i/" not in asyncio.run(scenario()).removeprefix("https://")
+
+
+def test_a_blank_config_falls_back_to_autodiscovery():
+    """Whitespace must not count as "the operator configured something",
+    or a stray space in the box would disable the quick-tunnel path."""
+    for blank in ("", "   ", "\n"):
+        host = make_host(base_url=blank)
+        assert host.pinned is False, f"{blank!r} 不该被当成已配置"
+        assert host.configured is False

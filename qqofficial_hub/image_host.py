@@ -92,7 +92,12 @@ class ImageHost:
     ) -> None:
         self.directory = Path(data_dir) / "images"
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.base_url = base_url.rstrip("/")
+        # Trim before anything else. A pasted URL routinely carries a leading
+        # or trailing space, and an untrimmed one is the worst kind of broken:
+        # `pinned` becomes True (so autodiscovery stands down) while
+        # `configured` stays False (so nothing is ever served) -- a dead
+        # config that reports no error and cannot heal itself.
+        self.base_url = str(base_url or "").strip().rstrip("/")
         #: A base URL typed into the config is a promise the operator made
         #: (a named tunnel, a reverse proxy) and must never be overwritten by
         #: autodiscovery. An empty one means "work it out yourself, and keep

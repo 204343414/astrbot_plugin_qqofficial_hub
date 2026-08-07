@@ -211,8 +211,10 @@ GET http://127.0.0.1:20241/quicktunnel
 {"hostname":"accent-owns-equally-expo.trycloudflare.com"}
 ```
 
-> 想要固定域名（重启不变）就用具名隧道，需要一个托管在 Cloudflare 的域名，
-> 然后把 `image_host_base_url` 填成你的域名。
+> **有自己的域名就别用快速隧道。** 具名隧道域名固定，`image_host_base_url`
+> 一次填死，「换域名」这类故障彻底消失。而且**不需要 `cert.pem`**——
+> 面板建隧道拿 token 即可，`tunnel run --token eyJ...`，不用 `tunnel login`。
+> 完整步骤见 [docs/NAMED_TUNNEL_SETUP.md](docs/NAMED_TUNNEL_SETUP.md)。
 
 #### 换了域名会自愈，不需要人管
 

@@ -11,7 +11,7 @@
     "default": false
   },
   "image_host_base_url": {
-    "description": "图床的公网地址，如 https://img.example.com。留空则尝试从本机 cloudflared 自动发现（快速隧道每次重启换域名，留空最省心）。",
+    "description": "图床的公网地址，如 https://img.example.com（不要带结尾斜杠）。填了就固定用它、永不自动覆盖——这是有自己域名时的推荐做法。留空则每次去问本机 cloudflared 当前的快速隧道域名；快速隧道重启会换名，换名瞬间已发出卡片里的图会全部裂掉。具名隧道搭建见 docs/NAMED_TUNNEL_SETUP.md。",
     "type": "string",
     "default": ""
   },
