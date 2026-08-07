@@ -230,6 +230,17 @@ GET http://127.0.0.1:20241/quicktunnel
 实测（真的重启了 cloudflared）：旧域名 `HTTP 530`，自愈后新域名 `HTTP 200`，
 2066 字节，图片可正常解码。`/诊断` 会显示「域名换过 N 次」。
 
+#### 插件重载会自动接管端口
+
+AstrBot 重载插件时**会保留旧实例存活**（未完成任务、interaction bridge 仍引用它），
+所以新实例构造出来时，旧实例还占着 9527。早期版本会直接
+`EADDRINUSE` 失败，然后被报成「拿不到公网地址」——于是所有人去查 cloudflared，
+而 cloudflared 一直是好的。
+
+现在新实例会**接管**端口，并继承旧实例的图片与抓取计数：已发出卡片里的 URL
+继续可用。同时构造函数**不再清空图片目录**——那会删掉旧实例正在服务的图，
+让群里所有卡片当场裂开，而症状看起来跟原因毫无关系。
+
 配置：`image_host_enabled` / `image_host_base_url` / `image_host_port` /
 `image_host_metrics_port` / `image_host_grace_seconds`。
 诊断会显示「就绪 / 缺 base_url / 端口未监听」，并附**被抓取次数**。

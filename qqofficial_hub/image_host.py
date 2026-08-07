@@ -34,6 +34,8 @@ short grace period first.
 from __future__ import annotations
 
 import asyncio
+import builtins
+import errno
 import hashlib
 import json
 import secrets
@@ -55,6 +57,17 @@ DEFAULT_GRACE_SECONDS = 300
 DEFAULT_MAX_AGE_SECONDS = 3600
 #: Refuse anything larger; a board is a few hundred KB.
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+#: Where the currently-listening host parks itself, so the next incarnation
+#: can find it. AstrBot keeps the *old* plugin instance alive across a reload
+#: (pending tasks still reference it), so its aiohttp site keeps holding the
+#: port. Without a handover the new instance hits EADDRINUSE and the whole
+#: image feature reports "拿不到公网地址" -- a wrong diagnosis of a port clash.
+_LIVE_KEY = "_qqhub_image_host_live"
+
+
+def _live_host() -> Any:
+    return getattr(builtins, _LIVE_KEY, None)
 
 
 @dataclass(slots=True)
@@ -131,9 +144,14 @@ class ImageHost:
         self._runner: Any = None
         self._site: Any = None
         self._sweeper: asyncio.Task | None = None
-        # Anything on disk from a previous run is unreachable: the tokens that
-        # addressed it are gone. Clear it rather than leak it.
-        self._purge_directory()
+        # Deliberately *not* purging the directory here. A plugin reload
+        # constructs the new instance while the old one is still alive and
+        # still serving its port, so wiping the folder deleted images that
+        # were live -- every card already sent went to a broken picture, and
+        # the visible symptom ("图床炸了") pointed nowhere near the cause.
+        # Files from a genuinely dead run are unreachable rather than
+        # harmful: their tokens are gone, and the sweeper collects them by
+        # age. Adoption in start() handles the reload case properly.
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -268,12 +286,66 @@ class ImageHost:
         await self._runner.setup()
         # 0.0.0.0 on purpose: the tunnel may reach us from another container.
         self._site = web.TCPSite(self._runner, "0.0.0.0", self.port)
-        await self._site.start()
+        try:
+            await self._site.start()
+        except OSError as exc:
+            self._site = None
+            await self._runner.cleanup()
+            self._runner = None
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            # Almost certainly our own predecessor: AstrBot keeps the old
+            # plugin instance alive across a reload, so its listener is still
+            # bound. Take the port from it rather than reporting a failure
+            # that reads like a misconfiguration.
+            if not await self._take_over_port():
+                raise
+            app = web.Application()
+            app.router.add_get("/i/{name}", self._serve)
+            app.router.add_get("/healthz", self._healthz)
+            self._runner = web.AppRunner(app, access_log=None)
+            await self._runner.setup()
+            self._site = web.TCPSite(self._runner, "0.0.0.0", self.port)
+            await self._site.start()
+        setattr(builtins, _LIVE_KEY, self)
         self._sweeper = asyncio.create_task(self._sweep_forever())
         logger.info("[QQHub] Image host listening on :%d -> %s",
                     self.port, self.base_url or "(未配置公网地址)")
 
-    async def stop(self) -> None:
+    async def _take_over_port(self) -> bool:
+        """Shut down a previous incarnation still holding our port.
+
+        Returns False when the port is held by something that is not us, in
+        which case the original bind error is the honest answer.
+        """
+        previous = _live_host()
+        if previous is None or previous is self or previous.port != self.port:
+            return False
+        logger.warning(
+            "[QQHub] 端口 %d 被上一个插件实例占用，正在接管（插件重载后的正常现象）",
+            self.port,
+        )
+        # Inherit what it was serving: those URLs are already inside cards
+        # people can still scroll to, so dropping them would break pictures
+        # that are currently fine.
+        try:
+            await previous.stop(purge=False)
+        except Exception:
+            logger.warning("[QQHub] 上一个图床实例关闭失败", exc_info=True)
+            return False
+        self._entries.update(previous._entries)
+        self._slots.update(previous._slots)
+        self._hits += previous._hits
+        self._misses += previous._misses
+        return True
+
+    async def stop(self, purge: bool = True) -> None:
+        """Release the port. ``purge=False`` keeps the files for a successor.
+
+        The default deletes them, which is right when the bot is shutting
+        down. During a reload the incoming instance adopts them instead --
+        deleting there broke every picture already sitting in a group.
+        """
         if self._sweeper is not None:
             self._sweeper.cancel()
             self._sweeper = None
@@ -281,7 +353,10 @@ class ImageHost:
             await self._runner.cleanup()
         self._runner = None
         self._site = None
-        self._purge_directory()
+        if _live_host() is self:
+            setattr(builtins, _LIVE_KEY, None)
+        if purge:
+            self._purge_directory()
 
     # --- publishing ---------------------------------------------------------
 

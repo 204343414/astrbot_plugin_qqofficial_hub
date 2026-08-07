@@ -8,6 +8,7 @@ import asyncio
 import io
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -280,15 +281,41 @@ def test_stopping_removes_every_file():
     asyncio.run(scenario())
 
 
-def test_a_restart_does_not_leave_unreachable_files_behind():
-    """Tokens live in memory, so files from a previous run can never be
-    served again -- keeping them would only leak disk."""
+def test_constructing_a_second_host_does_not_delete_live_files():
+    """This used to purge on construction, and it was a real outage.
+
+    AstrBot builds the new plugin instance while the old one is still alive
+    and still serving, so wiping the folder deleted images that were being
+    fetched right then. Every card already in the group went to a broken
+    picture, and the symptom pointed nowhere near the cause.
+
+    Old files are not dangerous: their tokens are gone, so nothing can
+    address them, and the sweeper removes them by age.
+    """
     host = make_host(base_url="https://x.test")
-    stray = host.directory / "leftover.png"
-    stray.write_bytes(png())
+    live = host.directory / "still-being-served.png"
+    live.write_bytes(png())
     second = ImageHost(host.directory.parent, base_url="https://x.test")
-    assert not stray.exists()
+    assert live.exists(), "构造新实例不能删掉仍在服务的图片"
+    # It does not *claim* them either -- it cannot, the tokens are not known.
     assert second.status()["stored_images"] == 0
+
+
+def test_a_stray_file_is_eventually_collected_by_age():
+    """The disk must still not grow forever."""
+    host = make_host(base_url="https://x.test", max_age_seconds=60)
+
+    async def scenario():
+        await host.start()
+        try:
+            host.publish(png(), slot="g1")
+            assert len(list(host.directory.glob("*"))) == 1
+            host.sweep(now=time.time() + 3600)
+            return list(host.directory.glob("*"))
+        finally:
+            await host.stop()
+
+    assert asyncio.run(scenario()) == []
 
 
 def test_starting_twice_is_harmless():
@@ -698,3 +725,128 @@ def test_an_unconfigured_host_always_probes():
 
     asyncio.run(scenario())
     assert tunnel.asked == 2, "还没拿到地址时必须每次都试"
+
+
+# --- surviving a plugin reload ----------------------------------------------
+#
+# AstrBot keeps the *old* plugin instance alive across a reload: pending tasks
+# and the interaction bridge still reference it. So the new instance is built
+# while the previous one is still listening, and "just bind the port" fails.
+# Reported as EADDRINUSE, diagnosed by the plugin as "拿不到公网地址", which
+# sent everyone looking at cloudflared instead of at the port.
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_a_reload_takes_the_port_over_instead_of_failing():
+    """The bug as it actually happened, against a real socket."""
+    port = _free_port()
+    first = make_host(base_url="https://x.test", port=port)
+    second = ImageHost(first.directory.parent, base_url="https://x.test",
+                       port=port)
+
+    async def scenario():
+        await first.start()
+        try:
+            # Same port, previous instance still listening.
+            await second.start()
+            assert second.running
+            assert first.running is False, "旧实例必须被接管后关闭"
+        finally:
+            await second.stop()
+            await first.stop()
+
+    asyncio.run(scenario())
+
+
+def test_the_successor_inherits_urls_that_are_still_in_cards():
+    """A published URL lives inside a card people can still scroll to.
+
+    Tencent fetches lazily, so dropping the entry on reload turns a picture
+    that was fine into a broken one -- with the card unchanged.
+    """
+    port = _free_port()
+    first = make_host(base_url="https://x.test", port=port)
+    second = ImageHost(first.directory.parent, base_url="https://x.test",
+                       port=port)
+
+    async def scenario():
+        await first.start()
+        url = first.publish(png(), slot="g1")
+        token = url.rsplit("/", 1)[-1]
+        try:
+            await second.start()
+            # Served by the *new* instance, using the old instance's token.
+            response = await second._serve(
+                SimpleNamespace(match_info={"name": token}))
+            return response.status
+        finally:
+            await second.stop()
+            await first.stop()
+
+    assert asyncio.run(scenario()) == 200
+
+
+def test_fetch_counts_carry_across_a_reload():
+    """Otherwise /诊断 would report '尚未被抓取' after every reload and make
+    a working chain look untested."""
+    port = _free_port()
+    first = make_host(base_url="https://x.test", port=port)
+    second = ImageHost(first.directory.parent, base_url="https://x.test",
+                       port=port)
+
+    async def scenario():
+        await first.start()
+        url = first.publish(png(), slot="g1")
+        await first._serve(
+            SimpleNamespace(match_info={"name": url.rsplit("/", 1)[-1]}))
+        try:
+            await second.start()
+        finally:
+            await second.stop()
+            await first.stop()
+
+    asyncio.run(scenario())
+    assert second.status()["hits"] == 1
+
+
+def test_a_port_held_by_something_else_is_still_an_error():
+    """Adoption must not paper over a genuine clash with another program --
+    that really is a misconfiguration and needs saying."""
+    import socket
+
+    port = _free_port()
+    blocker = socket.socket()
+    blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    blocker.bind(("0.0.0.0", port))
+    blocker.listen(1)
+
+    host = make_host(base_url="https://x.test", port=port)
+
+    async def scenario():
+        with pytest.raises(OSError):
+            await host.start()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        blocker.close()
+
+
+def test_a_normal_shutdown_still_cleans_up():
+    """purge=False is only for handover; stopping for real must not leak."""
+    host = make_host(base_url="https://x.test", port=_free_port())
+
+    async def scenario():
+        await host.start()
+        host.publish(png(), slot="g1")
+        directory = host.directory
+        await host.stop()
+        return list(directory.glob("*"))
+
+    assert asyncio.run(scenario()) == []

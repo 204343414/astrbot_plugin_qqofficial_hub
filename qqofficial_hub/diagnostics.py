@@ -31,6 +31,7 @@ REQUIRED_HUB_API = (
     "publish_image_checked",
     "image_host_ready",
     "image_host_reachable",
+    "image_host_problem",
     "actions",
 )
 

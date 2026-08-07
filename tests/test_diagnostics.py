@@ -31,6 +31,7 @@ def _plugin():
         publish_image_checked=lambda *a, **k: "",
         image_host_ready=lambda: False,
         image_host_reachable=lambda: False,
+        image_host_problem=lambda: "",
     )
     return plugin, registry, store
 

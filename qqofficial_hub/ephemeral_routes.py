@@ -243,17 +243,41 @@ class EphemeralCardMixin:
 
     async def image_host_reachable(self) -> bool:
         """Like :meth:`image_host_ready`, but re-checks the tunnel first."""
+        return not await self.image_host_problem()
+
+    async def image_host_problem(self) -> str:
+        """"" when cards can carry pictures, otherwise the specific reason.
+
+        Returning a reason rather than a bare False matters more than it
+        looks: a caller that only sees False has to guess, and the guess was
+        "拿不到公网地址" for what was actually a port already in use. That
+        sent everyone to inspect cloudflared, which was working perfectly.
+        Whoever knows why should be the one who says so.
+        """
         host = getattr(self, "image_host", None)
-        if host is None or not getattr(self, "image_host_enabled", False):
-            return False
+        if host is None:
+            return "图床未初始化"
+        if not getattr(self, "image_host_enabled", False):
+            return "图床未开启：配置里打开 image_host_enabled"
         await host.ensure_reachable()
-        if not host.running and host.configured:
+        if not host.configured:
+            return (
+                "拿不到公网地址：确认 cloudflared 正在运行，"
+                f"或直接填 image_host_base_url（metrics 端口 {host.metrics_port}）"
+            )
+        if not host.running:
             try:
                 await host.start()
-            except Exception:
+            except OSError as exc:
+                logger.warning("[QQHub] 图床端口绑定失败", exc_info=True)
+                return (
+                    f"端口 {host.port} 被占用且不是本插件的旧实例；"
+                    "换个 image_host_port，或停掉占用它的程序"
+                )
+            except Exception as exc:
                 logger.warning("[QQHub] 图床启动失败", exc_info=True)
-                return False
-        return bool(host.configured and host.running)
+                return f"图床启动失败：{type(exc).__name__}: {exc}"
+        return "" if host.running else "图床未能启动"
 
     def retire_image_slot(self, slot: str) -> None:
         host = getattr(self, "image_host", None)
