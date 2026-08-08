@@ -234,6 +234,17 @@ GET http://127.0.0.1:20241/quicktunnel
 实测（真的重启了 cloudflared）：旧域名 `HTTP 530`，自愈后新域名 `HTTP 200`，
 2066 字节，图片可正常解码。`/诊断` 会显示「域名换过 N 次」。
 
+#### 不想买域名？让隧道自己重启
+
+快速隧道偶尔会整个失效——容器还 `Up`，DNS 已经 `NXDOMAIN`。这种 Hub 救不了，
+cloudflared 必须**重启**才会申请新域名。一个看门狗容器就能补上这一环，
+见 [docs/TUNNEL_AUTOHEAL.md](docs/TUNNEL_AUTOHEAL.md)。
+
+里面有两个实测结论值得先看：cloudflared 官方镜像是 **distroless**，
+没有 `wget`/`curl`，网上常见的 `--health-cmd 'wget ...'` 照抄必然永远 unhealthy；
+以及 **502 和 000 必须区别对待**——502 说明隧道好好的、只是图床没应答，
+这时重启隧道只会把「图床坏了」变成「图床坏了而且地址一直在变」。
+
 #### cloudflared 后起也能自己恢复
 
 图床的后台守护任务现在**无论启动成功与否都会跑**。早期版本只在 `start()` 成功后
