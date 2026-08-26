@@ -288,7 +288,21 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         session_enabled = await SessionServiceManager.is_llm_enabled_for_session(
             origin
         )
-        if globally_enabled and session_enabled:
+        # 兼容 PlatformGate 门禁插件：它按平台禁止 LLM 说话（如官方 QQ bot 平台），
+        # 并把被拦截的平台写在全局标记 platformgate_llm_blocked_platforms 里。
+        # 若当前平台 LLM 实际被门禁拦截，即使全局/会话 LLM 都开着，也应视为
+        # "LLM 不可用"，从而接管弹面板/提示，避免"@bot 无反应"。面板发送不走
+        # LLM（见 _send_panel_from_event），故不会触发官方 bot LLM 说话。
+        llm_blocked_by_gate = False
+        try:
+            from astrbot.core import sp
+            blocked = await sp.global_get("platformgate_llm_blocked_platforms", [])
+            if isinstance(blocked, list):
+                platform_name = str(getattr(event, "get_platform_name", lambda: "")())
+                llm_blocked_by_gate = platform_name in blocked
+        except Exception:
+            llm_blocked_by_gate = False
+        if globally_enabled and session_enabled and not llm_blocked_by_gate:
             return
 
         event.stop_event()
