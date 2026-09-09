@@ -73,6 +73,13 @@ def install(owner: str, callback: Callback) -> int:
         logger.warning("[QQHub] Experimental Interaction intent enabled; a full restart was required.")
 
     async def patched_interaction(client, interaction):
+        # Arrival probe: on_interaction_create only fires when the gateway
+        # actually delivered an INTERACTION event, so this line appearing
+        # proves delivery while its absence proves the event never arrived.
+        logger.info(
+            "[QQHub] interaction event received: type=%r id=%r",
+            getattr(interaction, "type", None), getattr(interaction, "id", None),
+        )
         await _dispatch(client, interaction)
 
     module.QQOfficialPlatformAdapter.__init__ = patched_init
@@ -109,6 +116,12 @@ async def _dispatch(client: Any, interaction: Any) -> None:
     interaction_id = str(getattr(interaction, "id", "") or "").strip()
     interaction_type = getattr(interaction, "type", None)
     if not interaction_id or interaction_type not in HANDLED_TYPES:
+        # Was a silent return; without this the only symptom of an unhandled
+        # type is QQ's "请求第三方失败" with an empty console.
+        logger.warning(
+            "[QQHub] interaction dropped: id=%r type=%r (not in handled %s)",
+            interaction_id, interaction_type, sorted(HANDLED_TYPES),
+        )
         return
     state = _state()
     lock = state.get("lock")
