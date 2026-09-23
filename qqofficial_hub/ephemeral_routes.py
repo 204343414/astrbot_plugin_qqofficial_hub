@@ -69,7 +69,11 @@ class EphemeralCardMixin:
             return ephemeral.CODE_FAILED
         origin = f"{client.platform.meta().id}:GroupMessage:{group_openid}"
         member = str(getattr(interaction, "group_member_openid", "") or "")
-        if not await self._clicker_allowed(origin, member):
+        # Joining a game is itself the first meaningful interaction for a new
+        # participant. Do not require that person to send a separate message
+        # first; the game action still validates the seat and player state.
+        # Other card actions keep the anti-grief known-clicker gate.
+        if button_id != "join" and not await self._clicker_allowed(origin, member):
             return ephemeral.CODE_FORBIDDEN
         try:
             button, record = await self.store.claim_ephemeral_click(
