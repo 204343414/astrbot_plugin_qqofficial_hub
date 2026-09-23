@@ -302,6 +302,20 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
                 llm_blocked_by_gate = platform_name in blocked
         except Exception:
             llm_blocked_by_gate = False
+        # PlatformGate may block LLM globally while allowing selected groups.
+        # Respect its per-group allowlist so this fallback card does not replace
+        # the normal LLM reply in an explicitly allowed group.
+        if llm_blocked_by_gate:
+            try:
+                from astrbot.core import sp
+                allowed_groups = await sp.global_get("platformgate_llm_allowed_groups", {})
+                platform_name = str(getattr(event, "get_platform_name", lambda: "")())
+                group_id = str(event.get_group_id() or "").strip()
+                groups = allowed_groups.get(platform_name, []) if isinstance(allowed_groups, dict) else []
+                if groups and group_id in {str(x).strip() for x in groups}:
+                    llm_blocked_by_gate = False
+            except Exception:
+                pass
         if globally_enabled and session_enabled and not llm_blocked_by_gate:
             return
 
