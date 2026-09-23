@@ -311,6 +311,8 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
                 allowed_groups = await sp.global_get("platformgate_llm_allowed_groups", {})
                 platform_name = str(getattr(event, "get_platform_name", lambda: "")())
                 group_id = str(event.get_group_id() or "").strip()
+                if not group_id:
+                    group_id = origin.split(":", 2)[-1].strip() if "GroupMessage" in origin else ""
                 groups = allowed_groups.get(platform_name, []) if isinstance(allowed_groups, dict) else []
                 if groups and group_id in {str(x).strip() for x in groups}:
                     llm_blocked_by_gate = False
