@@ -171,3 +171,33 @@ def test_empty_and_oversized_images_are_rejected():
         _upload(data=b"")
     with pytest.raises(media_material.MaterialError):
         _upload(data=PNG + b"\x00" * media_material.MAX_BYTES)
+
+
+def test_delete_image_uses_the_delete_suffixed_route():
+    """实测：裸 DELETE /v2/media-images/{id} 会被拒（11001 不支持的调用）。
+
+    真正能删的是 ``.../{image_id}/delete``。少了这个后缀的表现非常像
+    "这个接口不支持删除"，于是额度回收静默失效 —— 素材越攒越多，攒到 100 张
+    就再也发不出带图卡片。
+    """
+    ok = asyncio.run(media_material.delete_image(_Client(), "102824564_abc"))
+    assert ok is True
+    delete = [c for c in _Session.calls if c[0] == "DELETE"][0]
+    assert delete[1].endswith("/v2/media-images/102824564_abc/delete")
+
+
+def test_delete_image_falls_back_to_the_bare_route(monkeypatch):
+    class _Rejecting(_Session):
+        def delete(self, url, headers=None):
+            _Session.calls.append(("DELETE", url, headers, None))
+            if url.endswith("/delete"):
+                return _Ctx(_Resp(
+                    status=400,
+                    body={"code": 11001, "err_code": 40011002, "message": "不支持的调用"},
+                    text='{"code":11001,"err_code":40011002,"message":"不支持的调用"}',
+                ))
+            return _Ctx(_Resp(status=204))
+
+    monkeypatch.setattr(media_material.aiohttp, "ClientSession", _Rejecting)
+    assert asyncio.run(media_material.delete_image(_Client(), "img1")) is True
+    assert [c[1].endswith("/v2/media-images/img1") for c in _Session.calls] == [False, True]

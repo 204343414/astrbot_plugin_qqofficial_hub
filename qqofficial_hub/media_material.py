@@ -143,16 +143,33 @@ async def list_images(client: Any) -> list[dict[str, Any]]:
     return body.get("images") or []
 
 
+#: 删除素材的真实路径带 ``/delete`` 后缀：
+#: ``DELETE /v2/media-images/{image_id}/delete``。
+#:
+#: 少了这个后缀会得到 ``{"code":11001,"err_code":40011002,"message":"不支持的调用"}``
+#: —— 注意它**不是** 404，也不是权限错误，所以看起来像"这个接口不能删"。实机日志里
+#: 就是这句，害得额度回收一直静默失败：素材照样上传，删不掉，100 张用完就再也发不出
+#: 带图卡片。保留裸路径作为兜底，万一哪天平台两种都收。
+DELETE_PATHS = ("{collection}/{image_id}/delete", "{collection}/{image_id}")
+
+
 async def delete_image(client: Any, image_id: str) -> bool:
     """Free one of the 100 material slots. Already-sent messages are unaffected."""
     if not image_id:
         return False
     auth = _auth(client)
+    last_error = ""
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        async with session.delete(f"{API_BASE}{COLLECTION_PATH}/{image_id}",
-                                  headers=auth) as resp:
-            if resp.status >= 300:
-                logger.warning("[QQHub] 删除素材失败 %s: %s", image_id,
-                               (await resp.text())[:200])
-                return False
-    return True
+        for template in DELETE_PATHS:
+            url = API_BASE + template.format(
+                collection=COLLECTION_PATH, image_id=image_id
+            )
+            async with session.delete(url, headers=auth) as resp:
+                if resp.status < 300:
+                    return True
+                last_error = (await resp.text())[:200]
+                # 40011002 = 这个路径不认，换下一个；其它错误没必要重试
+                if "40011002" not in last_error and resp.status != 404:
+                    break
+    logger.warning("[QQHub] 删除素材失败 %s: %s", image_id, last_error)
+    return False
