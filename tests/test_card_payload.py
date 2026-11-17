@@ -60,13 +60,13 @@ class _Hub(EphemeralCardMixin):
         return markdown
 
 
-def _send(card):
+def _send(card, **kwargs):
     client = _Client()
     hub = _Hub(client)
 
     async def scenario():
         await hub.store.bootstrap()
-        await hub.send_ephemeral_card(ORIGIN, card, client=client)
+        await hub.send_ephemeral_card(ORIGIN, card, client=client, **kwargs)
 
     asyncio.run(scenario())
     return client.api.sent[-1]
@@ -111,3 +111,29 @@ def test_a_markdown_image_is_passed_through_unmangled():
     markdown = f"![自检图 #480px #270px]({url})"
     payload = _send({"id": "hub.img", "markdown": markdown, "rows": []})
     assert payload["markdown"]["content"] == markdown
+
+
+def test_verify_image_asks_qq_to_fail_loudly():
+    """``force_verify_image_resource`` is the whole point of the flag.
+
+    Without it a card whose image did not survive the platform's transfer step
+    is delivered anyway, and the only symptom is a torn image in the group --
+    the send returns 200 and every log on our side looks healthy. A caller that
+    embeds a board *is* the picture, so it should be able to opt into the error.
+    """
+    payload = _send({
+        "id": "hub.verify",
+        "markdown": "![图 #480px #270px](qqbot-media://image/v1/tok)",
+        "rows": [],
+    }, verify_image=True)
+    assert payload["markdown"]["force_verify_image_resource"] is True
+
+
+def test_verify_image_is_off_unless_asked():
+    """The default must stay quiet: a decorative image should not block a card."""
+    payload = _send({
+        "id": "hub.noverify",
+        "markdown": "文字卡片",
+        "rows": [],
+    })
+    assert "force_verify_image_resource" not in payload["markdown"]

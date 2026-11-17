@@ -236,6 +236,40 @@ class EphemeralCardMixin:
             await host.start()
         return host.publish(data, slot=slot)
 
+    async def publish_image_material(self, data: bytes, client: Any = None,
+                                     origin: str = "",
+                                     file_name: str = "") -> dict[str, Any]:
+        """Put an image into QQ's own material store and return its reference.
+
+        This is the alternative to :meth:`publish_image_checked` for anything
+        that ends up *inside a card*. The hosted-URL route asks Tencent to come
+        to our address; this one hands them the bytes and never involves a
+        public URL, a tunnel, or DNS. It also happens to be the answer to
+        "why do I have to keep a web server up just to draw a board?".
+
+        Returns ``{"image_id", "url", "ttl"}`` -- ``url`` is a
+        ``qqbot-media://`` reference usable only inside Markdown image syntax.
+
+        The 100-image-per-bot quota is real: call :meth:`delete_image_material`
+        when a card is replaced, or a few games will exhaust it.
+        """
+        from . import media_material
+
+        client = client or self._get_qq_client(origin)
+        return await media_material.upload_image(client, data, file_name=file_name)
+
+    async def delete_image_material(self, image_id: str, client: Any = None,
+                                    origin: str = "") -> bool:
+        """Release one material slot. Best-effort: failure only costs quota."""
+        from . import media_material
+
+        try:
+            client = client or self._get_qq_client(origin)
+            return await media_material.delete_image(client, image_id)
+        except Exception:
+            logger.warning("[QQHub] 删除素材失败 %s", image_id, exc_info=True)
+            return False
+
     def image_host_ready(self) -> bool:
         """Whether cards can embed images right now.
 
@@ -317,6 +351,7 @@ class EphemeralCardMixin:
         msg_id: str | None = None,
         initiator_openid: str = "",
         clicker_header: str | None = None,
+        verify_image: bool = False,
     ) -> str:
         """Send a one-off card. Public API for flow/game plugins.
 
@@ -327,6 +362,12 @@ class EphemeralCardMixin:
         for ``initiator_openid``. Callers do not have to know the feature
         exists -- a game plugin that simply passes ``initiator_openid`` gets the
         header for free. Pass ``""`` to suppress it explicitly.
+
+        ``verify_image`` turns QQ's image-transfer check on
+        (``force_verify_image_resource``). Off by default because it can turn a
+        message that used to *arrive with a broken picture* into one that is
+        refused outright -- which is what a caller wants when the picture is
+        the point, and the opposite of what it wants when it is decoration.
         """
         validated = ephemeral.validate_card(card)
         if clicker_header is None:
@@ -337,13 +378,20 @@ class EphemeralCardMixin:
         nonce, session_id = await self.store.issue_ephemeral_card(
             origin, validated, session_id
         )
+        markdown: dict[str, Any] = {"content": self._prepend_header(
+            await self._render_dynamic_markdown(validated["markdown"], origin),
+            clicker_header,
+        )}
+        if verify_image:
+            # Ask QQ to fail the send rather than deliver a card whose picture
+            # silently did not survive the platform's own fetch-and-transfer
+            # step. Without this the only symptom is a torn image in the group
+            # and a 200 in the logs.
+            markdown["force_verify_image_resource"] = True
         payload: dict[str, Any] = {
             "group_openid": origin.split(":", 2)[-1],
             "msg_type": 2,
-            "markdown": {"content": self._prepend_header(
-                await self._render_dynamic_markdown(validated["markdown"], origin),
-                clicker_header,
-            )},
+            "markdown": markdown,
             "msg_seq": next_msg_seq(),
         }
         # A card may legitimately be all text and picture (a board snapshot, a

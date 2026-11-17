@@ -321,6 +321,43 @@ URL，只有真的有人来取过字节，才说明腾讯够得着这个地址�
 
 完整 API 与 QQ 平台限制见 **[docs/EPHEMERAL_CARDS.md](docs/EPHEMERAL_CARDS.md)**。
 
+## 卡片里的图片：两种来源
+
+卡片 Markdown 里的图片**不是随消息上传的**，而是腾讯服务端自己去抓那个 URL 再
+转存。抓不到、或者转存失败，发消息接口**默认不报错** —— 群里只剩一张裂图，而
+我们这边每个日志都是成功的。这个失败模式排查起来极耗时间，因为它看起来像图床
+坏了，其实图床、隧道、语法全都正常。
+
+所以 Hub 提供两条路：
+
+| 方式 | 依赖 | 适用 |
+| --- | --- | --- |
+| `publish_image_checked(data)` → 公网 URL | 需要自建图床 + 公网隧道 | 老路子，兼容旧配置 |
+| `publish_image_material(data)` → `qqbot-media://` | **什么都不需要** | 推荐；卡片里的图首选 |
+
+素材库是 QQ 官方的「素材管理」接口：字节直接进腾讯自己的存储，卡片里写
+`qqbot-media://image/v1/<token>` 引用，平台不需要访问我们的任何地址。
+
+```python
+material = await hub.publish_image_material(png_bytes, client=client, origin=origin)
+card = {"markdown": f"![棋盘 #720px #484px]({material['url']})", "rows": [...]}
+await hub.send_ephemeral_card(origin, card, verify_image=True)
+```
+
+三点必须知道：
+
+- **`verify_image=True`** 打开 `force_verify_image_resource`：图片转存失败时接口
+  直接报错（304010 / 40034004），而不是发出裂图。图是内容本身的时候（棋盘、
+  排行、快照）应该打开；纯装饰的图别开，否则图挂了会把整条消息带走。
+- **额度是 100 张/机器人，有效期 90 天。** 每走一步重画一张棋盘的玩法必须回收：
+  `await hub.delete_image_material(image_id)`。不回收就是"玩到一半突然全线失败"，
+  而且症状完全不像额度满了。
+- **只有 png/jpeg/gif/webp，单张 ≤10MB。** 别的格式在 PUT 那步被拒，错误信息
+  只有一句 `Access Denied.`，看不出是格式问题。
+
+`/图床测试` 会并排发两张卡（A 图床 URL、B QQ 素材库），两条都开转存校验 ——
+一次点击就能看出问题在图床、在隧道、还是在平台内部。
+
 ## 操作者身份与防刷
 
 **QQ 在群场景从不下发昵称。** 已对 botpy 1.2.1 核实：`GroupMessage._User` 只有

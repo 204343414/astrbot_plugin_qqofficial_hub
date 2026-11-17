@@ -466,65 +466,81 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
     )
     @filter.command("图床测试", alias={"qqhub 图床测试"}, priority=100)
     async def image_host_probe(self, event: AstrMessageEvent):
-        """End-to-end proof that a card can show a picture.
+        """A/B 对照：同一张图分别走「图床 URL」和「QQ 素材库」。
 
-        Sends one Markdown card embedding a freshly generated image from the
-        built-in host. This is the only test that covers the whole chain --
-        publish, tunnel, Tencent's fetcher, the client's renderer -- because
-        every earlier link can succeed while the picture still fails to load.
+        为什么不是一张：卡片显示不出来时，出问题的地方可能是自建图床、隧道、
+        腾讯来抓图、或者腾讯内部的转存，而发消息接口**默认不报错** —— 于是
+        每一环看起来都"成功"，群里只剩一张裂图。这个对照把一次点击变成一次
+        定位：
 
-        The probe image changes on every run on purpose: an identical picture
-        could be a cached copy of the last one, which would make a broken
-        tunnel look like a working one.
+        * 两条都显示 → 链路正常（顺便证明两个图源都活着）
+        * 只有 B 显示  → 公网图床这一段不通，但素材路线可用，游戏照常玩
+        * 两条都裂    → 问题在平台/客户端，别在图床上找
+
+        两条都打开 ``force_verify_image_resource``：转存失败会变成明确的
+        304010/40034004 错误，而不是发出一张裂图。失败可见，才谈得上定位。
+
+        图案每次都不一样，避免把客户端缓存当成成功。
         """
         event.stop_event()
         origin = str(event.unified_msg_origin or "")
         if "GroupMessage" not in origin:
             yield event.plain_result("图床测试仅支持 QQ Official 群聊。")
             return
-        if not self.image_host_enabled:
-            yield event.plain_result("图床未开启：请在 Hub 配置里打开 image_host_enabled。")
-            return
-        if not await self.image_host_reachable():
-            status = self.image_host.status()
-            yield event.plain_result(
-                "图床未就绪：" + (
-                    "拿不到公网地址（cloudflared 没跑，或 metrics 端口 "
-                    f"{self.image_host.metrics_port} 不可达）"
-                    if not status["configured"]
-                    else f"端口 {status['port']} 未监听"
-                )
-            )
-            return
+        client = self._get_qq_client(origin)
+        data = image_host.make_probe_png()
+        msg_id = real_msg_id(str(event.message_obj.message_id or "")) or None
+        failures: list[str] = []
+
+        async def send(content: str, label: str) -> None:
+            payload: dict[str, Any] = {
+                "group_openid": origin.split(":", 2)[-1],
+                "msg_type": 2,
+                "markdown": {
+                    "content": content,
+                    "force_verify_image_resource": True,
+                },
+                "msg_seq": next_msg_seq(),
+            }
+            if msg_id:
+                payload["msg_id"] = msg_id
+            try:
+                await client.api.post_group_message(**payload)
+            except Exception as exc:
+                failures.append(f"{label}：{type(exc).__name__}: {exc}")
+                logger.warning("[QQHub] 图床测试 %s 发送失败: %s", label, exc)
+            else:
+                logger.info("[QQHub] 图床测试 %s 已发送", label)
+
+        # A) 自建图床 + 公网 URL
         try:
-            data = image_host.make_probe_png()
             url = await self.publish_image_checked(data, slot=f"probe:{origin}")
         except Exception as exc:
-            logger.exception("[QQHub] Image host probe failed to publish")
-            yield event.plain_result(f"图床发布失败：{type(exc).__name__}: {exc}")
-            return
-        card = {
-            "id": "hub.imageprobe",
-            "markdown": (
-                "**图床自检**\n"
-                f"![自检图 #480px #270px]({url})\n"
-                "看到棋盘格 = 全链路通。裂图 = 腾讯抓不到这个地址。\n"
-                "再打一次 /图床测试，图案颜色会变——不变就是客户端缓存。"
-            ),
-            "rows": [],
-            "ttl_seconds": 600,
-        }
-        try:
-            await self.send_ephemeral_card(
-                origin, card,
-                msg_id=str(event.message_obj.message_id or "") or None,
-                initiator_openid=str(event.get_sender_id() or ""),
+            failures.append(f"A 发布：{type(exc).__name__}: {exc}")
+        else:
+            await send(
+                "**A 图床 URL**\n"
+                f"![自检图A #480px #270px]({url})\n"
+                "这一张走的是自建图床的公网地址。",
+                "A(图床)",
             )
+
+        # B) 官方素材库，完全不碰公网
+        try:
+            material = await self.publish_image_material(
+                data, client=client, origin=origin)
         except Exception as exc:
-            logger.exception("[QQHub] Image host probe card failed")
-            yield event.plain_result(f"图床自检卡发送失败：{type(exc).__name__}: {exc}")
-            return
-        logger.info("[QQHub] Image probe published %s", url)
+            failures.append(f"B 素材：{type(exc).__name__}: {exc}")
+        else:
+            await send(
+                "**B QQ 素材**\n"
+                f"![自检图B #480px #270px]({material['url']})\n"
+                "这一张走腾讯自己的素材库，不需要公网图床。",
+                "B(素材)",
+            )
+
+        if failures:
+            yield event.plain_result("图床测试有失败：\n" + "\n".join(failures))
 
     async def _send_native_mention_probe(
         self, event: AstrMessageEvent, *, reply: bool
