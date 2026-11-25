@@ -464,6 +464,55 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         filter.PlatformAdapterType.QQOFFICIAL
         | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
     )
+    @filter.command("素材", alias={"qqhub 素材", "素材用量"}, priority=100)
+    async def material_usage(self, event: AstrMessageEvent):
+        """列出 QQ 素材库里还剩几格 —— 只读，不传不删。
+
+        为什么需要它：素材库是「每机器人最多 100 张」的硬额度，用满之后
+        **所有带图卡片都会发不出去**，而报错只有一句 ``markdown image quota
+        exceeded``，看不出是谁占的。以前没有任何办法查用量，只能靠猜。
+
+        用法：``素材`` 看汇总，``素材 详情`` 逐条列出（image_id / 大小 / 过期时间）。
+        """
+        event.stop_event()
+        origin = str(event.unified_msg_origin or "")
+        if "GroupMessage" not in origin:
+            yield event.plain_result("素材用量仅支持 QQ Official 群聊。")
+            return
+        from .qqofficial_hub import media_material
+
+        try:
+            client = self._get_qq_client(origin)
+            images = await media_material.list_images(client)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[QQHub] 查询素材用量失败")
+            yield event.plain_result(f"查询失败：{type(exc).__name__}: {exc}")
+            return
+
+        total = len(images)
+        used = sum(int(image.get("file_size") or 0) for image in images)
+        lines = [
+            f"素材库用量：**{total} / 100** 格（剩 {max(0, 100 - total)} 格）",
+            f"占用空间：{used / 1024 / 1024:.1f} MB",
+        ]
+        if total >= 90:
+            lines.append("⚠ 快满了：满 100 张之后所有带图卡片都发不出去。")
+        # 「详情」才逐条列：一百行消息在群里刷屏，默认只给汇总
+        if "详情" in str(event.message_str or ""):
+            for image in images[:100]:
+                lines.append(
+                    f"· `{str(image.get('image_id') or '')[:16]}…` "
+                    f"{int(image.get('file_size') or 0) // 1024}KB "
+                    f"ttl={image.get('ttl') or '?'}"
+                )
+        else:
+            lines.append("（想看逐条列表：`素材 详情`）")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.platform_adapter_type(
+        filter.PlatformAdapterType.QQOFFICIAL
+        | filter.PlatformAdapterType.QQOFFICIAL_WEBHOOK
+    )
     @filter.command("图床测试", alias={"qqhub 图床测试"}, priority=100)
     async def image_host_probe(self, event: AstrMessageEvent):
         """A/B 对照：同一张图分别走「图床 URL」和「QQ 素材库」。
