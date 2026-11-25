@@ -78,6 +78,9 @@ class _Entry:
     created_at: float
     #: Set when superseded; the file is deleted once this passes.
     expires_at: float | None = None
+    #: 长期持有的图（``publish_if_absent`` 收进来的存量图库）。年龄清扫会跳过
+    #: 它们 —— 它们不是「一步棋盘」，是被人长期引用的素材。
+    pinned: bool = False
     #: How many times this image was actually fetched, and when last.
     #:
     #: This is the only honest evidence that the chain works end to end. A
@@ -272,6 +275,57 @@ class ImageHost:
         """
         self._slots.clear()
 
+    def _reindex_disk(self) -> int:
+        """把磁盘上已有的图重新纳入索引，返回找回的个数。
+
+        为什么需要：``_serve`` 只认**本进程生成**的 token（这是防目录穿越的
+        正确做法），而 ``_entries`` 是纯内存的 —— 于是**每重启一次，之前发出
+        去的所有 URL 就全部 404**，盘上的文件成了永远打不开的孤儿。
+
+        这个代价比看上去大：已经发到群里的卡片是按 URL 取图的，重启之后
+        那些卡片全部变成裂图，而且没有任何报错。
+
+        重建是安全的：文件名本身就是 32 字符的随机 token（``secrets.token_urlsafe``），
+        不可猜，所以「只服务自己写过的文件」这条性质保留 —— 只是把「自己写过的」
+        从「本次进程」放宽到「本目录里的」。digest 用文件内容现算。
+        """
+        recovered = 0
+        try:
+            candidates = list(self.directory.iterdir())
+        except OSError:
+            return 0
+        for path in candidates:
+            if not path.is_file() or path.name.endswith(".part"):
+                continue
+            token = path.name
+            # token 形状校验：长度够、只含 URL 安全字符、扩展名是图片
+            if len(token) < 24 or "/" in token or "\\" in token:
+                continue
+            try:
+                with open(path, "rb") as fh:
+                    if self._suffix(fh.read(16)) == "":
+                        continue
+            except (OSError, ValueError):
+                continue  # 不是 PNG/JPEG（或读不了），不索引
+            entry = self._entries.get(token)
+            if entry is not None and entry.path.exists():
+                continue  # 内存里已经有更新的那条，别覆盖
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            self._entries[token] = _Entry(
+                token=token,
+                path=path,
+                digest="",                       # 懒算：publish 的去重才需要
+                created_at=stat.st_mtime,
+                #: 盘上留下的图一律当长期图：分不清哪张是「上一步棋盘」、
+                #: 哪张是被引用的素材，按年龄删只会删错。
+                pinned=True,
+            )
+            recovered += 1
+        return recovered
+
     async def start(self) -> None:
         """Bind the local port. Idempotent."""
         if self._site is not None:
@@ -281,6 +335,12 @@ class ImageHost:
         app = web.Application()
         app.router.add_get("/i/{name}", self._serve)
         app.router.add_get("/healthz", self._healthz)
+
+        # 先把盘上已有的图纳入索引：否则重启之后，之前发出去的所有 URL 全部
+        # 404，群里那些卡片静默变成裂图。
+        recovered = self._reindex_disk()
+        if recovered:
+            logger.info("[QQHub] 图床重启：从磁盘找回 %s 张旧图（之前发出的 URL 继续可用）", recovered)
 
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
@@ -409,6 +469,53 @@ class ImageHost:
             self._slots[slot] = token
         return self._url(entry)
 
+    def publish_if_absent(self, data: bytes, slot: str = "") -> tuple[str, bool]:
+        """发布一张图；同样的内容已经在图床里就直接复用，返回 ``(url, 是否新建)``。
+
+        跟 :meth:`publish` 的区别：`publish` 按 **slot** 去重（同一个群只留一张
+        「当前」图，上一张进宽限期退休），那是给「每步重画的棋盘」用的。
+        存量图库要的是**按内容永久去重** —— 102 张梗图各不相同，也不该互相
+        退休。所以这里按 sha256 找已存在的条目，找到就复用它、不再写一份。
+
+        注意：不占 slot，所以这些图不会被 :meth:`_retire` 之类的回收逻辑扫走。
+        """
+        if not self.configured:
+            raise RuntimeError("图床未配置公网地址（image_host_base_url）")
+        if not self.running:
+            raise RuntimeError("图床未启动")
+        if not data:
+            raise ValueError("图片为空")
+        if len(data) > MAX_IMAGE_BYTES:
+            raise ValueError(f"图片超过 {MAX_IMAGE_BYTES // 1024 // 1024} MB")
+
+        suffix = self._suffix(data)
+        digest = hashlib.sha256(data).hexdigest()
+
+        # 内容相同就复用：先查内存索引，再查这张图自己的 digest
+        for entry in self._entries.values():
+            if entry.digest == digest and entry.path.exists():
+                return self._url(entry), False
+        # 磁盘上可能是重启前留下的（digest 没算过），按文件名找一轮
+        for entry in self._entries.values():
+            if entry.digest or not entry.path.exists():
+                continue
+            try:
+                if hashlib.sha256(entry.path.read_bytes()).hexdigest() == digest:
+                    entry.digest = digest
+                    return self._url(entry), False
+            except OSError:
+                continue
+
+        token = f"{secrets.token_urlsafe(18)}{suffix}"
+        path = self.directory / token
+        path.write_bytes(data)
+        entry = _Entry(
+            token=token, path=path, digest=digest, created_at=time.time(),
+            pinned=True,  #: 存量图库：不按年龄清扫，也不设 expires_at
+        )
+        self._entries[token] = entry
+        return self._url(entry), True
+
     def retire_slot(self, slot: str) -> None:
         """Let a slot's image expire, e.g. when a match ends."""
         self._retire(self._slots.pop(slot, None))
@@ -523,7 +630,13 @@ class ImageHost:
         removed = 0
         for token, entry in list(self._entries.items()):
             expired = entry.expires_at is not None and entry.expires_at <= now
-            stale = (now - entry.created_at) > self.max_age_seconds
+            #: 年龄清扫只针对「用完即弃」的图。长期持有的图（pinned）不按年龄
+            #: 删除，但仍然尊重 expires_at —— 显式退休永远有效。
+            stale = (
+                not entry.pinned
+                and entry.expires_at is None
+                and (now - entry.created_at) > self.max_age_seconds
+            )
             if not expired and not stale:
                 continue
             try:

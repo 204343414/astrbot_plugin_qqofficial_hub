@@ -922,3 +922,152 @@ def test_stopping_cancels_the_supervisor():
         return sweeper.cancelled() or sweeper.done()
 
     assert asyncio.run(scenario()) is True
+
+
+# --- 重启后旧 URL 还能用（0.25.0）-------------------------------------------
+
+def test_restart_reclaims_urls_already_sent_to_groups():
+    """重启之后，之前发出去的 URL 必须还能打开。
+
+    踩过的坑：`_serve` 只认**本进程生成**的 token（防目录穿越的正确做法），
+    而 `_entries` 是纯内存的 —— 于是每重启一次，之前发出的所有 URL 全部 404，
+    群里那些卡片静默变成裂图，而且没有任何报错。
+    """
+    host = make_host(base_url="https://x.test")
+
+    async def scenario():
+        await host.start()
+        try:
+            url = host.publish(png(), slot="g1")
+            token = url.rsplit("/", 1)[-1]
+            return token
+        finally:
+            # purge=False = 重载语义：文件留给下一个实例接手
+            await host.stop(purge=False)
+
+    token = asyncio.run(scenario())
+
+    # 换一个实例，模拟 AstrBot 重载插件 / 进程重启
+    revived = ImageHost(host.directory.parent, base_url="https://x.test")
+    assert revived.status()["stored_images"] == 0   # 构造时还没索引
+
+    async def serve():
+        await revived.start()
+        try:
+            assert revived.status()["stored_images"] >= 1, "启动时应该从磁盘找回旧图"
+            return await revived._serve(_FakeRequest(token))
+        finally:
+            await revived.stop()
+
+    response = asyncio.run(serve())
+    assert response.status == 200
+    assert response.body == png()
+
+
+class _FakeRequest:
+    """只够 `_serve` 用：读 match_info 里的 name。"""
+
+    def __init__(self, name):
+        self.match_info = {"name": name}
+
+
+def test_reindex_skips_non_images_and_partials():
+    """索引只收真正的图片，别把临时文件或垃圾当成可服务的条目。"""
+    host = make_host(base_url="https://x.test")
+    host.directory.mkdir(parents=True, exist_ok=True)
+    (host.directory / ("a" * 32 + ".jpg.part")).write_bytes(png())
+    (host.directory / ("b" * 32 + ".jpg")).write_bytes(b"not an image at all")
+    (host.directory / ("c" * 32 + ".png")).write_bytes(png())
+    assert host._reindex_disk() == 1
+
+
+def test_publish_if_absent_reuses_the_same_bytes():
+    """同样的内容只存一份 —— 存量图库导入时不能存出 102 份重复。"""
+    host = make_host(base_url="https://x.test")
+    data = png()
+
+    async def scenario():
+        await host.start()
+        try:
+            first, created1 = host.publish_if_absent(data)
+            second, created2 = host.publish_if_absent(data)
+            return first, created1, second, created2, host.status()["stored_images"]
+        finally:
+            await host.stop(purge=False)
+
+    first, created1, second, created2, stored = asyncio.run(scenario())
+    assert created1 is True
+    assert created2 is False, "同样内容不该再存一份"
+    assert first == second
+    assert stored == 1
+
+
+def test_publish_if_absent_does_not_retire_previous_images():
+    """存量图库不能被 slot 的「退休」逻辑扫走 —— 它们要被长期引用。"""
+    host = make_host(base_url="https://x.test")
+
+    async def scenario():
+        await host.start()
+        try:
+            a, _ = host.publish_if_absent(png((1, 2, 3)))
+            b, _ = host.publish_if_absent(png((4, 5, 6)))
+            return a, b
+        finally:
+            await host.stop(purge=False)
+
+    a, b = asyncio.run(scenario())
+    assert a != b
+    # 两张都还在盘上（publish 的 slot 退休机制没有介入）
+    names = {path.name for path in host.directory.glob("*") if path.is_file()}
+    assert a.rsplit("/", 1)[-1] in names
+    assert b.rsplit("/", 1)[-1] in names
+
+
+def test_sweep_deletes_hour_old_slot_images_but_not_pinned():
+    """年龄清扫：一步棋盘的旧图该删，存量素材图不该删。
+
+    原实现只看 ``created_at``，超过 `max_age_seconds`（默认 1 小时）就删，
+    根本不看是否被引用。存量图库导入之后，一小时一到全部消失 —— 群里
+    那些卡片会静默变成裂图，而且没有报错。
+    """
+    host = make_host(base_url="https://x.test", max_age_seconds=3600)
+
+    async def scenario():
+        await host.start()
+        try:
+            slot_url = host.publish(png((9, 9, 9)), slot="g1")
+            pinned_url, _created = host.publish_if_absent(png((7, 7, 7)))
+            return slot_url, pinned_url
+        finally:
+            await host.stop(purge=False)
+
+    slot_url, pinned_url = asyncio.run(scenario())
+    slot_token = slot_url.rsplit("/", 1)[-1]
+    pinned_token = pinned_url.rsplit("/", 1)[-1]
+
+    # 两小时之后
+    removed = host.sweep(now=time.time() + 7200)
+
+    on_disk = {path.name for path in host.directory.glob("*") if path.is_file()}
+    assert removed == 1
+    assert slot_token not in on_disk, "过期的一步棋盘图应该被删掉"
+    assert pinned_token in on_disk, "存量素材图不能被年龄清扫删掉"
+
+
+def test_pinned_image_still_honours_explicit_retirement():
+    """pinned 只挡年龄清扫，显式退休（retire/slot 替换）照样生效。"""
+    host = make_host(base_url="https://x.test")
+
+    async def scenario():
+        await host.start()
+        try:
+            url, _ = host.publish_if_absent(png((5, 5, 5)))
+            token = url.rsplit("/", 1)[-1]
+            host._retire(token)
+            host.sweep(now=time.time() + host.grace_seconds + 5)
+            return token
+        finally:
+            await host.stop(purge=False)
+
+    token = asyncio.run(scenario())
+    assert not (host.directory / token).exists()
