@@ -603,11 +603,36 @@ class ImageHost:
         entry.hits += 1
         entry.last_hit_at = time.time()
         self._hits += 1
+
+        # 一张图在群里被看到的每一刻，腾讯都可能再来取一次（同一个 URL、同一批
+        # 字节）。它带 If-None-Match 来问「变了没」，那就答「没变」—— 304 不带
+        # 响应体，省掉的是**我们自己的出口带宽**，而图床跑在隧道后面，带宽恰恰
+        # 是最紧的那一环。digest 天生就是内容校验和，不必再算一次哈希。
+        try:
+            if not entry.digest:
+                entry.digest = hashlib.sha256(entry.path.read_bytes()).hexdigest()
+        except OSError:
+            entry.digest = ""
+        etag = f'"{entry.digest}"' if entry.digest else ""
+        # getattr：不假设调用方一定带 headers（测试桩、内部调用）
+        headers_in = getattr(request, "headers", None) or {}
+        if etag and headers_in.get("If-None-Match", "") == etag:
+            return web.Response(
+                status=304,
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": "public, max-age=86400",
+                },
+            )
+
         content_type = "image/png" if name.endswith(".png") else "image/jpeg"
+        headers = {"Cache-Control": "public, max-age=86400"}
+        if etag:
+            headers["ETag"] = etag
         return web.Response(
             body=entry.path.read_bytes(),
             content_type=content_type,
-            headers={"Cache-Control": "public, max-age=600"},
+            headers=headers,
         )
 
     async def _healthz(self, _request: Any) -> Any:

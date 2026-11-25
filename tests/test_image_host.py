@@ -965,10 +965,11 @@ def test_restart_reclaims_urls_already_sent_to_groups():
 
 
 class _FakeRequest:
-    """只够 `_serve` 用：读 match_info 里的 name。"""
+    """只够 `_serve` 用：读 match_info 里的 name、读 If-None-Match。"""
 
-    def __init__(self, name):
+    def __init__(self, name, headers=None):
         self.match_info = {"name": name}
+        self.headers = headers or {}
 
 
 def test_reindex_skips_non_images_and_partials():
@@ -1109,3 +1110,62 @@ def test_offline_publish_still_demands_a_base_url():
     host = make_host(base_url="")
     with pytest.raises(RuntimeError):
         host.offline_publish_if_absent(png())
+
+
+def test_serve_answers_304_when_the_caller_already_has_the_bytes():
+    """腾讯会反复读同一张图：带上 If-None-Match 就答 304，不再重发一遍字节。
+
+    图床跑在 cloudflared 隧道后面，出口带宽是最紧的一环。一张图在群里被看到
+    的每一刻都可能触发一次拉取，304 省下的是整份图片。
+    """
+    host = make_host(base_url="https://x.test")
+
+    async def scenario():
+        await host.start()
+        try:
+            url = host.publish(png((40, 50, 60)), slot="g1")
+            token = url.rsplit("/", 1)[-1]
+            first = await host._serve(_FakeRequest(token))
+            etag = first.headers.get("ETag")
+            second = await host._serve(
+                _FakeRequest(token, headers={"If-None-Match": etag})
+            )
+            return first, etag, second
+        finally:
+            await host.stop(purge=False)
+
+    first, etag, second = asyncio.run(scenario())
+    assert first.status == 200
+    assert etag and etag.startswith('"') and etag.endswith('"')
+    assert second.status == 304
+    assert not getattr(second, "body", None), "304 不该带响应体"
+
+
+def test_serve_ignores_a_stale_etag():
+    """ETag 对不上时老老实实重发图片，不能图省事回 304（那就是裂图）。
+
+    这里断言的是「严格相等比较」—— 客户端发来的 if-none-match 可能是
+    `W/"..."` 或多个值的列表，一律当「对不上」处理，宁可多发一次。
+    """
+    host = make_host(base_url="https://x.test")
+
+    async def scenario():
+        await host.start()
+        try:
+            url = host.publish(png((11, 22, 33)), slot="g1")
+            token = url.rsplit("/", 1)[-1]
+            ok = await host._serve(_FakeRequest(token))
+            real_etag = ok.headers.get("ETag")
+            stale = await host._serve(
+                _FakeRequest(token, headers={"If-None-Match": '"deadbeef"'})
+            )
+            weak = await host._serve(
+                _FakeRequest(token, headers={"If-None-Match": f"W/{real_etag}"})
+            )
+            return stale, weak
+        finally:
+            await host.stop(purge=False)
+
+    stale, weak = asyncio.run(scenario())
+    assert stale.status == 200 and stale.body
+    assert weak.status == 200 and weak.body
