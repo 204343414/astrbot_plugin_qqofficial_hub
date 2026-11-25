@@ -133,14 +133,65 @@ async def upload_image(client: Any, data: bytes, file_name: str = "") -> dict[st
     return result
 
 
-async def list_images(client: Any) -> list[dict[str, Any]]:
+async def list_images(
+    client: Any,
+    *,
+    page_size: int = 50,
+    max_pages: int = 10,
+) -> list[dict[str, Any]]:
+    """列出素材库里的图，**翻完所有页**。
+
+    这个接口一页只给 20 张（不管传什么 limit 都不变），靠 ``next_cursor``
+    翻页，同时用 ``total`` 报总数。只看第一页是会骗人的：素材库明明满了
+    （``total=100``），第一页却只回 20 条 —— 于是一个「还剩 80 格」的结论
+    会让所有写满之后的判断全部落空。
+    """
     auth = _auth(client)
+    images: list[dict[str, Any]] = []
+    cursor = ""
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        async with session.get(API_BASE + COLLECTION_PATH, headers=auth) as resp:
+        for _ in range(max_pages):
+            params = {"limit": str(int(page_size))}
+            if cursor:
+                params["cursor"] = cursor
+            async with session.get(
+                API_BASE + COLLECTION_PATH, headers=auth, params=params
+            ) as resp:
+                body = await resp.json(content_type=None)
+                if resp.status != 200:
+                    raise MaterialError(f"素材列表失败 {resp.status}: {body}")
+            batch = body.get("images") or []
+            images.extend(batch)
+            cursor = str(body.get("next_cursor") or "")
+            total = body.get("total")
+            # 两种终止条件都认：没有游标了，或者已经拿到 total 那么多
+            if not cursor or not batch:
+                break
+            if total is not None and len(images) >= int(total):
+                break
+    return images
+
+
+async def count_images(client: Any) -> dict[str, Any]:
+    """素材库用量：``{"total": 平台报的总数, "listed": 实际翻到的条数}``。
+
+    ``total`` 是平台自己给的、最可信；``listed`` 只用来发现「翻页没翻完」。
+    """
+    auth = _auth(client)
+    params = {"limit": "50"}
+    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
+        async with session.get(
+            API_BASE + COLLECTION_PATH, headers=auth, params=params
+        ) as resp:
             body = await resp.json(content_type=None)
             if resp.status != 200:
                 raise MaterialError(f"素材列表失败 {resp.status}: {body}")
-    return body.get("images") or []
+    total = body.get("total")
+    return {
+        "total": int(total) if total is not None else None,
+        "listed": len(body.get("images") or []),
+        "raw": body,
+    }
 
 
 #: 删除素材的真实路径带 ``/delete`` 后缀：
@@ -173,3 +224,49 @@ async def delete_image(client: Any, image_id: str) -> bool:
                     break
     logger.warning("[QQHub] 删除素材失败 %s: %s", image_id, last_error)
     return False
+
+
+def _taken_at(image: dict[str, Any]) -> float:
+    """素材的创建时间（秒）。拿不到就返回 0，让它在排序里排最前。"""
+    for key in ("create_time", "created_at", "upload_time", "timestamp"):
+        value = image.get(key)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        # 毫秒时间戳见过，顺手归一
+        return number / 1000 if number > 10_000_000_000 else number
+    return 0.0
+
+
+async def prune(client: Any, keep: int = 0, max_delete: int = 200) -> dict[str, Any]:
+    """把素材库删到只剩最新的 ``keep`` 张，返回删了多少、失败多少。
+
+    为什么需要「按时间删」而不是只靠 meme 自己记账：平台发 markdown 时会
+    **强制转存**图片，那些副本我们没有 image_id（上传接口不回给我们），
+    一条账都记不上。它们只能在这里被看见、被删掉 —— 而它们恰恰是 100 格
+    里最先塞满的那一半。
+
+    删除**不影响已经发出去的消息**：那些消息用的是转存副本，各自独立。
+    """
+    images = await list_images(client)
+    keep = max(0, int(keep))
+    if len(images) <= keep:
+        return {"total": len(images), "deleted": 0, "failed": 0, "kept": len(images)}
+
+    ordered = sorted(images, key=_taken_at)     # 最早的在前
+    victims = ordered[: len(ordered) - keep][: max(0, int(max_delete))]
+    deleted = failed = 0
+    for image in victims:
+        if await delete_image(client, str(image.get("image_id") or "")):
+            deleted += 1
+        else:
+            failed += 1
+    return {
+        "total": len(images),
+        "deleted": deleted,
+        "failed": failed,
+        "kept": len(images) - deleted,
+    }

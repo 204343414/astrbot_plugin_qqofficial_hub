@@ -484,18 +484,57 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
         try:
             client = self._get_qq_client(origin)
             images = await media_material.list_images(client)
+            counted = await media_material.count_images(client)
         except Exception as exc:  # noqa: BLE001
             logger.exception("[QQHub] 查询素材用量失败")
             yield event.plain_result(f"查询失败：{type(exc).__name__}: {exc}")
             return
 
-        total = len(images)
-        used = sum(int(image.get("file_size") or 0) for image in images)
+        # 用平台自己报的 total：它才是额度认定的那个数。翻页结果只用来发现
+        # 「没翻完」，不能拿来当用量 —— 这个接口一页只给 20 张是骗人的。
+        total = counted.get("total")
+        if total is None:
+            total = len(images)
+
+        # 「清理」是回收动作：删到只剩 keep 张（默认清空）。删的是素材库坑位，
+        # 已经发出去的消息不受影响 —— 那些用的是平台转存时留下的副本。
+        if "清理" in str(event.message_str or ""):
+            keep = 0
+            for token in str(event.message_str or "").replace("清理", " ").split():
+                if token.isdigit():
+                    keep = int(token)
+                    break
+            try:
+                result = await media_material.prune(client, keep=keep)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("[QQHub] 清理素材库失败")
+                yield event.plain_result(f"清理失败：{type(exc).__name__}: {exc}")
+                return
+            tail = f"，失败 {result['failed']} 张" if result["failed"] else ""
+            yield event.plain_result(
+                f"素材库清理完成：原有 {result['total']} 张 → 删掉 {result['deleted']} 张"
+                f"{tail}，现在 {result['kept']} 张。\n"
+                "（已经发出去的卡片不受影响，它们用的是平台转存时的副本。）"
+                "想要只留最新 20 张：`素材 清理 20`"
+            )
+            return
+
         lines = [
             f"素材库用量：**{total} / 100** 格（剩 {max(0, 100 - total)} 格）",
-            f"占用空间：{used / 1024 / 1024:.1f} MB",
         ]
-        if total >= 90:
+        # 体积只统计翻到的那一页，不能冒充全库占用 —— 干脆不报总数，只报件数，
+        # 免得「0.0 MB」出现在一个已经塞满 100 张的库前面。
+        if images:
+            listed = sum(int(image.get("file_size") or 0) for image in images)
+            lines.append(
+                f"（逐条翻了 {len(images)} 张，合计 {listed / 1024 / 1024:.1f} MB）"
+            )
+        if total >= 100:
+            lines.append(
+                "❌ 已满：现在所有**新**的带图卡片都发不出去（`markdown image quota "
+                "exceeded`）。已经发出去的卡片不受影响 —— 素材被取图时还在。"
+            )
+        elif total >= 90:
             lines.append("⚠ 快满了：满 100 张之后所有带图卡片都发不出去。")
         # 「详情」才逐条列：一百行消息在群里刷屏，默认只给汇总
         if "详情" in str(event.message_str or ""):
@@ -506,7 +545,7 @@ class QQOfficialHubPlugin(EphemeralCardMixin, KeyboardBuildMixin, Star):
                     f"ttl={image.get('ttl') or '?'}"
                 )
         else:
-            lines.append("（想看逐条列表：`素材 详情`）")
+            lines.append("（想看逐条列表：`素材 详情`；配额满了用 `素材 清理`）")
         yield event.plain_result("\n".join(lines))
 
     @filter.platform_adapter_type(

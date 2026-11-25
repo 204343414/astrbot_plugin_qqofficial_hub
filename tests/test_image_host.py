@@ -1169,3 +1169,129 @@ def test_serve_ignores_a_stale_etag():
     stale, weak = asyncio.run(scenario())
     assert stale.status == 200 and stale.body
     assert weak.status == 200 and weak.body
+
+
+def test_material_listing_walks_every_page():
+    """素材列表一页只给 20 条，靠 next_cursor 翻页 —— 只看第一页会骗人。
+
+    实机就是这样：素材库 total=100（满了），第一页只回 20 条。如果按「翻到的
+    条数」当用量，会得出「还剩 80 格」的结论，然后所有基于「满了没有」的判断
+    全部落空。
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "media_material_under_test",
+        Path(__file__).resolve().parent.parent / "qqofficial_hub" / "media_material.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    pages = [
+        {"total": 45, "images": [{"image_id": f"a{i}"} for i in range(20)], "next_cursor": "c1"},
+        {"total": 45, "images": [{"image_id": f"b{i}"} for i in range(20)], "next_cursor": "c2"},
+        {"total": 45, "images": [{"image_id": f"c{i}"} for i in range(5)], "next_cursor": ""},
+    ]
+    seen_params = []
+
+    class _Resp:
+        def __init__(self, payload):
+            self.status = 200
+            self._payload = payload
+
+        async def json(self, content_type=None):
+            return self._payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Session:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def get(self, url, headers=None, params=None):
+            seen_params.append(dict(params or {}))
+            return _Resp(pages[min(len(seen_params) - 1, len(pages) - 1)])
+
+    class _Aiohttp:
+        ClientSession = _Session
+        ClientTimeout = lambda **k: None  # noqa: E731
+
+    module.aiohttp = _Aiohttp
+    module._auth = lambda client: {}
+
+    images = asyncio.run(module.list_images(object()))
+    assert len(images) == 45, f"应该翻完三页拿到 45 条，实际 {len(images)}"
+    assert len(seen_params) == 3
+    assert "cursor" not in seen_params[0], "第一页不该带游标"
+    assert seen_params[1].get("cursor") == "c1"
+    assert seen_params[2].get("cursor") == "c2"
+
+
+def test_prune_deletes_the_oldest_first_and_keeps_the_newest():
+    """回收要删「最早上传的」，不能删刚传的那张。
+
+    实机背景：素材库里有一半是平台转存留下的孤儿，我们没有它们的 image_id，
+    只能靠这个「按时间删」的路径回收。删错方向的话，刚画好的卡片会在
+    下一轮清理里被自己删掉 —— 发出去就是裂图。
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "media_material_prune",
+        Path(__file__).resolve().parent.parent / "qqofficial_hub" / "media_material.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    # 五张，时间戳从旧到新；create_time 用毫秒，验证归一
+    images = [
+        {"image_id": f"id{i}", "create_time": (1000 + i) * 1000} for i in range(5)
+    ]
+    deleted = []
+
+    async def fake_list(client):
+        return list(images)
+
+    async def fake_delete(client, image_id):
+        deleted.append(image_id)
+        return True
+
+    module.list_images = fake_list
+    module.delete_image = fake_delete
+
+    result = asyncio.run(module.prune(object(), keep=2))
+    assert result["deleted"] == 3
+    assert deleted == ["id0", "id1", "id2"], "必须删最旧的三张"
+    assert result["kept"] == 2
+
+
+def test_prune_is_a_no_op_when_under_the_limit():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "media_material_prune2",
+        Path(__file__).resolve().parent.parent / "qqofficial_hub" / "media_material.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    async def fake_list(client):
+        return [{"image_id": "a", "create_time": 1}]
+
+    async def fake_delete(client, image_id):
+        raise AssertionError("没超上限就不该删东西")
+
+    module.list_images = fake_list
+    module.delete_image = fake_delete
+    result = asyncio.run(module.prune(object(), keep=5))
+    assert result["deleted"] == 0
