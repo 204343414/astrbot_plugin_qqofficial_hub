@@ -1071,3 +1071,41 @@ def test_pinned_image_still_honours_explicit_retirement():
 
     token = asyncio.run(scenario())
     assert not (host.directory / token).exists()
+
+
+def test_offline_publish_needs_no_running_port_but_still_dedupes():
+    """批量导入不该要求图床先跑起来 —— 恰恰是导入之后它才有内容。
+
+    但「同样的内容只存一份」这条不变，包括盘上遗留、还没算过 digest 的文件。
+    """
+    host = make_host(base_url="https://x.test")
+    host.directory.mkdir(parents=True, exist_ok=True)
+    # 模拟上一代进程留下的文件（digest 未知）
+    legacy_bytes = png((10, 20, 30))
+    legacy_name = "z" * 32 + ".png"
+    (host.directory / legacy_name).write_bytes(legacy_bytes)
+    host._reindex_disk()
+
+    async def never_started():
+        # 故意不 start()：running 为 False
+        assert host.running is False
+        first, created1 = host.offline_publish_if_absent(legacy_bytes)
+        second, created2 = host.offline_publish_if_absent(legacy_bytes)
+        fresh, created3 = host.offline_publish_if_absent(png((99, 88, 77)))
+        return first, created1, second, created2, fresh, created3
+
+    first, created1, second, created2, fresh, created3 = asyncio.run(never_started())
+    assert created1 is False, "盘上已有同样内容，应该复用而不是再写一份"
+    assert first == second == f"https://x.test/i/{legacy_name}"
+    assert created3 is True and fresh != first
+
+    # 同样的图只应该存在一份
+    sizes = sorted(p.name for p in host.directory.glob("*") if p.is_file())
+    assert len(sizes) == 2, f"应该只有遗留那张 + 新写那张，实际 {sizes}"
+
+
+def test_offline_publish_still_demands_a_base_url():
+    """没有公网地址就不该写：写出来也是打不开的 URL，比不写更糟。"""
+    host = make_host(base_url="")
+    with pytest.raises(RuntimeError):
+        host.offline_publish_if_absent(png())

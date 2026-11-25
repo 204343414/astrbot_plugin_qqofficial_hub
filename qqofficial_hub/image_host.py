@@ -516,6 +516,54 @@ class ImageHost:
         self._entries[token] = entry
         return self._url(entry), True
 
+    def offline_publish_if_absent(self, data: bytes) -> tuple[str, bool]:
+        """批量导入用：不需要端口、不需要图床在线，只往目录里写。
+
+        ``publish_if_absent`` 会检查 ``configured`` / ``running``，因为线上发图
+        必须拿到一个**能打开**的地址；但批量导入是另一回事 —— 它只需要把文件
+        落到目录里并算出一个 URL，端点有没有起来和这件事无关。而恰恰在导入的
+        时候，人往往还没把图床跑起来（甚至正是为了让图床有内容才导入）。
+
+        去重和 ``publish_if_absent`` 完全一致：同样的内容只存一份，按 sha256
+        认，包括盘上那些从上一代进程遗留下来、还没算过 digest 的文件。
+        """
+        if not self.configured:
+            raise RuntimeError("图床未配置公网地址（image_host_base_url）")
+        if not data:
+            raise ValueError("图片为空")
+        if len(data) > MAX_IMAGE_BYTES:
+            raise ValueError(f"图片超过 {MAX_IMAGE_BYTES // 1024 // 1024} MB")
+
+        suffix = self._suffix(data)
+        digest = hashlib.sha256(data).hexdigest()
+
+        for entry in self._entries.values():
+            if not entry.path.exists():
+                continue
+            if entry.digest == digest:
+                return self._url(entry), False
+            if entry.digest:
+                continue
+            try:
+                if hashlib.sha256(entry.path.read_bytes()).hexdigest() == digest:
+                    entry.digest = digest
+                    return self._url(entry), False
+            except OSError:
+                continue
+
+        self.directory.mkdir(parents=True, exist_ok=True)
+        token = f"{secrets.token_urlsafe(18)}{suffix}"
+        path = self.directory / token
+        path.write_bytes(data)
+        self._entries[token] = _Entry(
+            token=token,
+            path=path,
+            digest=digest,
+            created_at=time.time(),
+            pinned=True,  # 存量图库：不按年龄清扫
+        )
+        return self._url(self._entries[token]), True
+
     def retire_slot(self, slot: str) -> None:
         """Let a slot's image expire, e.g. when a match ends."""
         self._retire(self._slots.pop(slot, None))
